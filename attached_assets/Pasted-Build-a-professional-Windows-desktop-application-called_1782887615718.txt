@@ -1,0 +1,361 @@
+Build a professional Windows desktop application called **Hika**.
+
+## Project Overview
+
+Hika is a private AI meeting assistant that helps users during live meetings by listening to the meeting audio, generating live transcripts, understanding the conversation, and providing real-time AI answers, technical explanations, suggestions, code, documentation, and meeting insights.
+
+The application should look modern, premium, lightweight, and extremely fast.
+
+The overall UI should follow the design style of ChatGPT Desktop, Notion, and Linear.
+
+---
+
+# Main Requirements
+
+The application must be a desktop application.
+
+Technology Stack
+
+* Electron (or Tauri)
+* React
+* TypeScript
+* Tailwind CSS
+* Framer Motion
+* Transparent Window Support
+* Always-On-Top Window
+* OpenAI Realtime API (future integration)
+* Whisper / Deepgram (future integration)
+
+---
+
+# Home Screen
+
+Display a beautiful dashboard.
+
+Left Navigation
+
+• Hika Logo
+
+• New Session
+
+• Dashboard
+
+• History
+
+• Documents
+
+• Knowledge Base
+
+• AI Models
+
+• Settings
+
+• Profile
+
+Right Side
+
+Show
+
+* Welcome Card
+* Previous Sessions
+* Recent Meeting Summaries
+* Credits Remaining
+* Connected Knowledge Sources
+* AI Status
+* Quick Start Button
+
+---
+
+# Start Session
+
+When the user clicks **Start Session**, open a new meeting assistant workspace.
+
+The UI should split into two panels.
+
+---
+
+LEFT PANEL
+
+---
+
+Title
+
+Live Transcript
+
+Features
+
+* Live speech transcription
+* Speaker identification
+* Timestamp
+* Auto scrolling
+* Search transcript
+* Copy transcript
+* Export transcript
+* Highlight important questions
+* Highlight action items
+* Highlight decisions
+
+Transcript should continuously update while the meeting is running.
+
+---
+
+RIGHT PANEL
+
+---
+
+Title
+
+AI Assistant
+
+This panel continuously analyzes the conversation and generates intelligent responses.
+
+Whenever someone asks a question, Hika should immediately generate:
+
+* Suggested Answer
+* Technical Explanation
+* Business Explanation
+* Root Cause
+* Solution
+* Code
+* SQL Query
+* PySpark Code
+* Azure Commands
+* Architecture Explanation
+* Documentation References
+* Best Practices
+* Risks
+* Confidence Score
+
+Responses should appear automatically without requiring user interaction.
+
+---
+
+# Floating AI Overlay (PiP Mode)
+
+Create a separate floating assistant window.
+
+This window should behave like a Picture-in-Picture assistant.
+
+Requirements
+
+* Always on top
+* Draggable
+* Resizable
+* Rounded corners
+* Glassmorphism effect
+* Modern animations
+* Adjustable transparency
+* Compact mode
+* Expand mode
+* Auto hide
+* Pin option
+
+The overlay should only display
+
+* Suggested Answers
+* Key Points
+* Current Question
+* Confidence Score
+* Important Alerts
+
+No transcript should appear inside the floating overlay.
+
+Only AI suggestions.
+
+The overlay should feel like a smart assistant floating on the user's desktop.
+
+It must never interrupt the user's work.
+
+The user should be able to move it anywhere.
+
+The transparency should be adjustable from 20% to 100%.
+
+---
+
+# Screen Sharing Experience
+
+When the user shares their screen during Microsoft Teams, Zoom, or Google Meet, Hika should provide a **Private Assistant Mode**.
+
+Design the application architecture so that the assistant is intended to remain a personal reference for the user during meetings wherever the operating system and screen-sharing application support private overlays or window-specific sharing.
+
+Include settings such as:
+
+* Private Assistant Mode
+* Overlay Transparency
+* Overlay Position
+* Overlay Size
+* Auto Hide
+* Click Through Mode
+* Lock Position
+
+The application should gracefully handle different screen-sharing scenarios and clearly indicate when the overlay may be visible depending on the user's sharing method.
+
+---
+
+# AI Intelligence
+
+The AI should continuously understand
+
+* Meeting topic
+* Previous discussion
+* Current speaker
+* Questions
+* Action items
+* Risks
+* Decisions
+* Technical discussion
+* Business discussion
+
+Whenever a question is detected, immediately generate an answer.
+
+Example
+
+Client
+
+"Can you explain why yesterday's pipeline failed?"
+
+Immediately show
+
+Suggested Answer
+
+Root Cause
+
+Resolution
+
+Prevention
+
+Relevant Documentation
+
+Confidence
+
+---
+
+# Knowledge Sources
+
+Allow users to connect
+
+PDF
+
+Word
+
+PowerPoint
+
+Excel
+
+Local Folder
+
+GitHub
+
+Azure DevOps
+
+Jira
+
+Confluence
+
+Notion
+
+Google Drive
+
+OneDrive
+
+SharePoint
+
+The AI should use these documents as context when answering.
+
+---
+
+# Meeting Summary
+
+After stopping the session automatically generate
+
+Executive Summary
+
+Meeting Minutes
+
+Action Items
+
+Assigned Tasks
+
+Risks
+
+Decisions
+
+Open Questions
+
+Follow-up Tasks
+
+Export as
+
+PDF
+
+Word
+
+Markdown
+
+Text
+
+---
+
+# Settings
+
+Theme
+
+Dark
+
+Light
+
+System
+
+Transparency
+
+Overlay Size
+
+Overlay Position
+
+Microphone Selection
+
+Speaker Selection
+
+Language
+
+AI Model
+
+Keyboard Shortcuts
+
+Notifications
+
+---
+
+# UI Design
+
+The UI should look like a premium SaaS desktop application.
+
+Use
+
+Glassmorphism
+
+Smooth animations
+
+Rounded corners
+
+Blur effects
+
+Gradient accents
+
+Premium typography
+
+Minimal design
+
+Responsive layouts
+
+Professional spacing
+
+Modern icons
+
+Every transition should be animated using Framer Motion.
+
+No placeholder components.
+
+Every button, card, menu, popup, and interaction should be fully designed.
+
+The application should feel like a polished commercial AI product ready for production.

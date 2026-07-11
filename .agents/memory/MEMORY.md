@@ -1,0 +1,1 @@
+- [MediaRecorder WebM fragmentation](mediarecorder-webm.md) — timeslice produces headerless chunks; use stop/restart every 8s for valid files OpenAI accepts.

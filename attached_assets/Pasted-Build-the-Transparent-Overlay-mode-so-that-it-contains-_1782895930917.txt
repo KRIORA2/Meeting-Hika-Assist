@@ -1,0 +1,55 @@
+Build the Transparent Overlay mode so that it contains all the same functionality available before clicking the **Transparent Mode** button.
+
+### Requirements
+
+* Before entering Transparent Mode, the application currently has:
+
+  * Live Transcript panel
+  * AI Answers panel
+  * Meeting controls
+  * Session management
+  * All existing meeting features
+
+* After the user clicks **Transparent Mode**, open a full-screen overlay that includes all of these features.
+
+### Overlay Layout
+
+* Display the **Live Transcript** on the left panel.
+* Display **Hika AI Answers** on the right panel.
+* Keep all meeting controls functional inside the overlay.
+* Ensure every feature available on the normal meeting screen also works inside the overlay without any limitations.
+
+### Overlay Behavior
+
+* The overlay should become the only visible interface.
+* Hide the main application completely after the overlay opens.
+* Hide all pages, navigation, dashboard, and other UI elements.
+* The overlay should independently manage the entire meeting session.
+* Users should be able to continue the meeting entirely from the overlay without returning to the main application.
+
+### Meeting Controls
+
+Inside the overlay, the following must work exactly as they do in the normal meeting screen:
+
+* Live transcription
+* AI-generated answers
+* Audio capture
+* Screen capture (if enabled)
+* Meeting timer
+* Pause/Resume
+* Copy transcript
+* Copy AI answers
+* Auto-scroll
+* Settings
+* Any other existing meeting features
+
+### End Meeting
+
+When the user clicks **End Meeting** inside the overlay:
+
+* End the current meeting session completely.
+* Stop all background recording, transcription, and AI processing.
+* Close the Transparent Overlay.
+* Hide the overlay and return the application to its default state.
+* Ensure no meeting processes continue running in the background.
+* The overlay should act as the single controller for the entire meeting lifecycle while it is active.

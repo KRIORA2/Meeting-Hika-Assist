@@ -1,0 +1,8 @@
+uploads = []
+generated = []
+
+[[outputs]]
+id = "QZNifUTEcP2o9fjbi9fmI"
+uri = "file://hika-desktop.tar.gz"
+type = "unspecified"
+title = "Hika Desktop — Full Parakeet Parity Build"

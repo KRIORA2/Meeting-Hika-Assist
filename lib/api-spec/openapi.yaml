@@ -1,0 +1,367 @@
+openapi: 3.1.0
+info:
+  # Do not change the title, if the title changes, the import paths will be broken
+  title: Api
+  version: 0.1.0
+  description: Hika.ai API specification - AI Meeting Assistant
+servers:
+  - url: /api
+    description: Base API path
+tags:
+  - name: health
+    description: Health operations
+  - name: sessions
+    description: Meeting session operations
+  - name: insights
+    description: AI insight operations
+  - name: openai
+    description: OpenAI AI operations
+paths:
+  /healthz:
+    get:
+      operationId: healthCheck
+      tags: [health]
+      summary: Health check
+      description: Returns server health status
+      responses:
+        "200":
+          description: Healthy
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthStatus"
+
+  /sessions:
+    get:
+      operationId: listSessions
+      tags: [sessions]
+      summary: List all meeting sessions
+      responses:
+        "200":
+          description: List of sessions
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Session"
+    post:
+      operationId: createSession
+      tags: [sessions]
+      summary: Create a new meeting session
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SessionInput"
+      responses:
+        "201":
+          description: Created session
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Session"
+
+  /sessions/{id}:
+    get:
+      operationId: getSession
+      tags: [sessions]
+      summary: Get a session by ID
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Session
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Session"
+    patch:
+      operationId: updateSession
+      tags: [sessions]
+      summary: Update a session (e.g. end it)
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SessionUpdate"
+      responses:
+        "200":
+          description: Updated session
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Session"
+    delete:
+      operationId: deleteSession
+      tags: [sessions]
+      summary: Delete a session
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "204":
+          description: Deleted
+
+  /sessions/{id}/insights:
+    get:
+      operationId: listSessionInsights
+      tags: [insights]
+      summary: Get all insights for a session
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: List of insights for this session
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Insight"
+
+  /insights:
+    post:
+      operationId: createInsight
+      tags: [insights]
+      summary: Store an AI-generated insight
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/InsightInput"
+      responses:
+        "201":
+          description: Created insight
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Insight"
+
+  /stats:
+    get:
+      operationId: getStats
+      tags: [sessions]
+      summary: Get overall usage statistics
+      responses:
+        "200":
+          description: Statistics
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Stats"
+
+  /openai/analyze:
+    post:
+      operationId: analyzeContext
+      tags: [openai]
+      summary: Analyze meeting context (transcript + optional screenshot) and return AI answer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AnalyzeInput"
+      responses:
+        "200":
+          description: AI-generated answer and suggestions
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AnalyzeResult"
+
+  /openai/transcribe:
+    post:
+      operationId: transcribeAudio
+      tags: [openai]
+      summary: Transcribe audio chunk to text
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TranscribeInput"
+      responses:
+        "200":
+          description: Transcript text
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TranscribeResult"
+
+components:
+  schemas:
+    HealthStatus:
+      type: object
+      properties:
+        status:
+          type: string
+      required:
+        - status
+
+    Session:
+      type: object
+      required: [id, title, platform, createdAt]
+      properties:
+        id:
+          type: integer
+        title:
+          type: string
+        platform:
+          type: string
+          description: "zoom | teams | meet | other"
+        status:
+          type: string
+          description: "active | ended"
+        insightCount:
+          type: integer
+        createdAt:
+          type: string
+        endedAt:
+          type: ["string", "null"]
+
+    SessionInput:
+      type: object
+      required: [title, platform]
+      properties:
+        title:
+          type: string
+          minLength: 1
+        platform:
+          type: string
+
+    SessionUpdate:
+      type: object
+      properties:
+        title:
+          type: string
+        status:
+          type: string
+
+    Insight:
+      type: object
+      required: [id, sessionId, question, answer, createdAt]
+      properties:
+        id:
+          type: integer
+        sessionId:
+          type: integer
+        question:
+          type: string
+        answer:
+          type: string
+        confidence:
+          type: ["string", "null"]
+        createdAt:
+          type: string
+
+    InsightInput:
+      type: object
+      required: [sessionId, question, answer]
+      properties:
+        sessionId:
+          type: integer
+        question:
+          type: string
+        answer:
+          type: string
+        confidence:
+          type: string
+
+    Stats:
+      type: object
+      required: [totalSessions, activeSessions, totalInsights, avgInsightsPerSession]
+      properties:
+        totalSessions:
+          type: integer
+        activeSessions:
+          type: integer
+        totalInsights:
+          type: integer
+        avgInsightsPerSession:
+          type: number
+
+    AnalyzeInput:
+      type: object
+      required: [transcript]
+      properties:
+        transcript:
+          type: string
+          description: Recent meeting transcript text
+        screenshotBase64:
+          type: ["string", "null"]
+          description: Optional base64-encoded PNG screenshot of the meeting screen
+        sessionId:
+          type: ["integer", "null"]
+
+    AISection:
+      type: object
+      required: [type, title, content]
+      properties:
+        type:
+          type: string
+          description: "technical|rootCause|solution|code|sql|pyspark|azure|architecture|bestPractices|risks|businessImpact"
+        title:
+          type: string
+        content:
+          type: string
+        language:
+          type: ["string", "null"]
+
+    AnalyzeResult:
+      type: object
+      required: [question, answer, suggestions, confidence]
+      properties:
+        question:
+          type: string
+          description: The question or topic detected in the transcript that was answered
+        answer:
+          type: string
+        suggestions:
+          type: array
+          items:
+            type: string
+        confidence:
+          type: string
+          enum: [high, medium, low]
+        sections:
+          type: array
+          items:
+            $ref: "#/components/schemas/AISection"
+
+    TranscribeInput:
+      type: object
+      required: [audioBase64]
+      properties:
+        audioBase64:
+          type: string
+          description: Base64-encoded audio (webm/ogg format)
+        mimeType:
+          type: string
+
+    TranscribeResult:
+      type: object
+      required: [transcript]
+      properties:
+        transcript:
+          type: string
