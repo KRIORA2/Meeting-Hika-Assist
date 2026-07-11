@@ -1,66 +1,105 @@
-# See https://docs.github.com/en/get-started/getting-started-with-git/ignoring-files for more about ignoring files.
+# ==========================================
+# Dependencies
+# ==========================================
+node_modules/
+.pnpm-store/
 
-# compiled output
-dist
-tmp
-out-tsc
+# ==========================================
+# Environment files
+# ==========================================
+.env
+.env.*
+!.env.example
+Psgrdb.env
+
+# ==========================================
+# Build output
+# ==========================================
+dist/
+build/
+coverage/
+tmp/
+out-tsc/
 *.tsbuildinfo
-.expo
-.expo-shared
 
-# dependencies
-node_modules
+# Electron build output
+**/release/
+**/win-unpacked/
+**/win-ia32-unpacked/
+**/win-x64-unpacked/
+**/builder-debug.yml
+**/builder-effective-config.yaml
 
-# IDEs and editors
-/.idea
-.project
-.classpath
-.c9/
-*.launch
-.settings/
-*.sublime-workspace
+# Generated binaries
+*.exe
+*.msi
+*.dmg
+*.AppImage
+*.deb
+*.rpm
 
-# IDE - VSCode
+# ==========================================
+# Logs
+# ==========================================
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# ==========================================
+# IDEs
+# ==========================================
 .vscode/*
 !.vscode/settings.json
+!.vscode/extensions.json
 !.vscode/tasks.json
 !.vscode/launch.json
-!.vscode/extensions.json
 
-# misc
-/.sass-cache
-/connect.lock
-/coverage
-/libpeerconnection.log
-npm-debug.log
-yarn-error.log
-testem.log
-/typings
+.idea/
+.project
+.classpath
+.settings/
 
-# System Files
+# ==========================================
+# OS files
+# ==========================================
 .DS_Store
 Thumbs.db
 
-.cursor/rules/nx-rules.mdc
-.github/instructions/nx.instructions.md
-
+# ==========================================
 # Replit
+# ==========================================
 .cache/
 .local/
 
-# Electron build outputs
-artifacts/
-release/
-build/
-*.exe
-*.msi
+# ==========================================
+# Misc
+# ==========================================
+.sass-cache/
+connect.lock
+typings/
+
+# ==========================================
+# Archive files
+# ==========================================
 *.zip
 *.7z
 
-# Environment
-.env
-.env.*
-Psgrdb.env
+# Workspace build outputs
+**/node_modules/
+**/dist/
+**/release/
+**/.tsbuildinfo
+**/.replit-artifact/
 
-# Logs
-*.log
+# Electron
+**/win-unpacked/
+**/win-ia32-unpacked/
+**/win-x64-unpacked/
+**/builder-debug.yml
+**/builder-effective-config.yaml
+
+# Installers
+*.exe
+*.msi

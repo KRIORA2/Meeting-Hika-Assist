@@ -1,0 +1,28 @@
+{
+  "name": "@workspace/hika-desktop",
+  "version": "1.0.0",
+  "description": "Hika — AI Meeting Assistant with OS-level screen-capture protection",
+  "main": "dist/electron/main.js",
+  "scripts": {
+    "dev": "concurrently --kill-others \"pnpm run compile:watch\" \"pnpm run electron:wait\"",
+    "compile": "tsc -p tsconfig.electron.json",
+    "compile:watch": "tsc -p tsconfig.electron.json --watch",
+    "electron:wait": "wait-on dist/electron/main.js && electron .",
+    "build": "pnpm run compile && electron-builder --config electron-builder.config.js",
+    "build:win": "pnpm run compile && electron-builder --win --config electron-builder.config.js",
+    "build:mac": "pnpm run compile && electron-builder --mac --config electron-builder.config.js",
+    "build:linux": "pnpm run compile && electron-builder --linux --config electron-builder.config.js",
+    "dist": "pnpm run compile && electron-builder --config electron-builder.config.js --publish=never"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "concurrently": "^9.0.0",
+    "electron": "^32.0.0",
+    "electron-builder": "^25.0.0",
+    "typescript": "^5.0.0",
+    "wait-on": "^8.0.0"
+  },
+  "keywords": ["hika", "electron", "meeting", "ai", "assistant"],
+  "author": "Hika.ai",
+  "license": "MIT"
+}

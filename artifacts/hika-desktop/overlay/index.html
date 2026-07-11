@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta http-equiv="Content-Security-Policy"
+    content="default-src 'self' http://localhost:* 'unsafe-inline' 'unsafe-eval'; connect-src http://localhost:* blob:; media-src blob: mediastream:" />
+  <title>Hika</title>
+  <link rel="stylesheet" href="overlay.css" />
+</head>
+<body>
+<div id="shell">
+
+  <!-- ── Start screen ── -->
+  <div id="start-screen">
+    <div class="logo-ring">⚡</div>
+    <h2>Hika Meeting Assistant</h2>
+    <p>AI Meeting Assistant — invisible to screen share</p>
+    <input id="meeting-name" class="name-input" type="text"
+      placeholder="Meeting name (e.g. Client Call)…" maxlength="80" />
+    <button id="start-btn" class="btn-start">Start Session</button>
+  </div>
+
+  <!-- ── Session screen ── -->
+  <div id="session-screen" style="display:none">
+
+    <!-- Header (drag region) -->
+    <div class="hdr">
+      <div class="hdr-logo">⚡</div>
+      <span class="hdr-title" id="hdr-title">Meeting</span>
+      <span class="hdr-timer" id="hdr-timer">0:00</span>
+      <span class="status-dot" id="status-dot">● Live</span>
+      <div id="meeting-badge" class="meeting-badge" style="display:none"></div>
+      <button class="hdr-btn" id="hide-btn" title="Minimise to tray">−</button>
+      <button class="hdr-btn danger" id="end-hdr-btn" title="End session">✕</button>
+    </div>
+
+    <!-- Toolbar: opacity, font size, click-through, export -->
+    <div class="toolbar">
+      <label class="toolbar-group" title="Overlay opacity">
+        <span class="toolbar-icon">🌗</span>
+        <input id="opacity-slider" class="ctrl-slider" type="range" min="20" max="100" value="94" />
+      </label>
+      <div class="toolbar-group" title="Font size">
+        <button class="ctrl-btn" id="font-dec">A−</button>
+        <button class="ctrl-btn" id="font-inc">A+</button>
+      </div>
+      <button class="ctrl-btn" id="clickthrough-btn" title="Toggle click-through mode">🖱️ Off</button>
+      <button class="ctrl-btn" id="export-btn" title="Export session as Markdown">↓ Export</button>
+    </div>
+
+    <!-- Split view -->
+    <div class="split">
+
+      <!-- Transcript pane -->
+      <div class="tx-pane">
+        <div class="pane-hdr">
+          <span class="pane-lbl">Transcript</span>
+          <span id="rec-indicator" style="display:none;font-size:9px;color:#ef4444">● REC</span>
+        </div>
+        <div class="scroll" id="tx-scroll">
+          <div class="empty-hint"><span>🎤</span>Tap Record to start</div>
+        </div>
+        <div id="live-tx" class="tx-live" style="display:none">
+          <span class="tx-live-lbl">● LIVE</span>
+          <span id="live-tx-text"></span><span class="cursor">▋</span>
+        </div>
+      </div>
+
+      <!-- AI Answers pane -->
+      <div class="ai-pane">
+        <div class="pane-hdr">
+          <span class="pane-lbl">⚡ AI Answers</span>
+          <select id="lang-filter" class="lang-select" title="Filter by language">
+            <option value="all">All</option>
+            <option value="sql">SQL</option>
+            <option value="python">Python</option>
+            <option value="pyspark">PySpark</option>
+            <option value="bash">CLI</option>
+            <option value="hcl">Terraform</option>
+          </select>
+        </div>
+        <div class="scroll" id="ai-scroll">
+          <div class="empty-hint"><span>⚡</span>AI answers appear here</div>
+        </div>
+        <div id="history-strip" style="display:none" class="history-strip">
+          <div class="history-lbl">Previous</div>
+          <div id="history-list"></div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- Bottom bar: mic source + ask + end -->
+    <div class="bottom">
+      <button class="mic-btn" id="mic-btn" title="Record">🎤</button>
+      <select id="mic-source" class="src-select" title="Microphone source"></select>
+      <input class="ask-input" id="ask-input" type="text" placeholder="Ask Hika anything…" />
+      <button class="btn-ask" id="ask-btn">Ask</button>
+      <button class="btn-end" id="end-btn">End</button>
+    </div>
+
+  </div>
+
+  <!-- Resize handle -->
+  <div id="resize-handle" class="resize-handle"></div>
+</div>
+
+<!-- Copy toast -->
+<div id="copy-toast" class="copy-toast">✓ Copied</div>
+
+<script src="overlay.js"></script>
+</body>
+</html>

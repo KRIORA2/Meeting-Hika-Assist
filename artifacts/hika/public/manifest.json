@@ -1,0 +1,15 @@
+{
+  "name": "Hika — AI Meeting Assistant",
+  "short_name": "Hika",
+  "description": "Real-time AI Meeting Assistant. Live transcription + instant AI answers inside Zoom, Teams & Meet.",
+  "start_url": "/session",
+  "display": "standalone",
+  "background_color": "#09090b",
+  "theme_color": "#6366f1",
+  "orientation": "landscape-primary",
+  "icons": [
+    { "src": "/icons/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ],
+  "categories": ["productivity", "business"],
+  "lang": "en"
+}
