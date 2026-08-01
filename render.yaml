@@ -1,4 +1,23 @@
 services:
+  - type: web
+    name: hikanest-api-beta
+    runtime: node
+    rootDir: .
+    plan: free
+    autoDeploy: true
+    buildCommand: pnpm install --frozen-lockfile && pnpm --filter @workspace/api-server run build
+    startCommand: pnpm --filter @workspace/api-server run start
+    healthCheckPath: /api/healthz
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_URL
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: GOOGLE_CLIENT_ID
+        sync: false
+
   - type: static_site
     name: hikanest-web-beta
     env: static
@@ -6,6 +25,9 @@ services:
     installCommand: pnpm install --frozen-lockfile
     buildCommand: pnpm install --frozen-lockfile && pnpm --filter @workspace/hika run build
     publishPath: artifacts/hika/dist/public
+    envVars:
+      - key: VITE_API_URL
+        value: https://hikanest-api-beta.onrender.com
     routes:
       - type: rewrite
         source: /*
