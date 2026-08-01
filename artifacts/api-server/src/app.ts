@@ -6,6 +6,22 @@ import { logger } from "./lib/logger";
 
 const app: Express = express();
 
+app.get("/", (_req, res) => {
+  res.json({
+    service: "hikanest-api",
+    status: "ok",
+    health: "/api/healthz",
+  });
+});
+
+app.get("/api", (_req, res) => {
+  res.json({
+    service: "hikanest-api",
+    status: "ok",
+    health: "/api/healthz",
+  });
+});
+
 app.use(
   pinoHttp({
     logger,
