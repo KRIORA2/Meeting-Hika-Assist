@@ -103,3 +103,8 @@ typings/
 # Installers
 *.exe
 *.msi
+
+# Publishable desktop download assets (required by /install page)
+!artifacts/hika/public/downloads/
+!artifacts/hika/public/downloads/windows/
+!artifacts/hika/public/downloads/windows/Hika-Setup.exe
