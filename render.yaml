@@ -3,6 +3,7 @@ services:
     name: hikanest-web-beta
     env: static
     rootDir: .
+    installCommand: corepack enable && corepack prepare pnpm@10.14.0 --activate && pnpm install --frozen-lockfile
     buildCommand: pnpm install --frozen-lockfile && pnpm --filter @workspace/hika run build
     publishPath: artifacts/hika/dist/public
     routes:
