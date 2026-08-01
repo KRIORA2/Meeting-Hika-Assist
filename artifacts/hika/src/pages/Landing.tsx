@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
 import { useLocation } from "wouter";
+import { getAuthSession, signOut } from "@/lib/auth";
 import {
   Zap, Mic, Brain, EyeOff, History, Download, ChevronRight,
   CheckCircle, Play, Monitor, Layers, ArrowRight, Star,
@@ -7,16 +8,22 @@ import {
 } from "lucide-react";
 
 type BeforeInstallPromptEvent = Event & {
-  prompt: () => Promise<void>;
+      desc: "Stop recording and Hikanest instantly surfaces answers, suggestions, and key points.",
   userChoice: Promise<{ outcome: "accepted" | "dismissed" }>;
 };
 
 export default function Landing() {
   const [, navigate] = useLocation();
+  const [sessionEmail, setSessionEmail] = useState<string>("");
   const [installPrompt, setInstallPrompt] = useState<BeforeInstallPromptEvent | null>(null);
   const [installed, setInstalled] = useState(false);
   const [installBanner, setInstallBanner] = useState(false);
   const [activeStep, setActiveStep] = useState(0);
+
+  useEffect(() => {
+    const session = getAuthSession();
+    setSessionEmail(session?.email || "");
+  }, []);
 
   useEffect(() => {
     const handler = (e: Event) => {
@@ -56,7 +63,7 @@ export default function Landing() {
     },
     {
       n: "03", icon: Brain, title: "Get Instant AI Answers",
-      desc: "Stop recording and Hika instantly surfaces answers, suggestions, and key points.",
+      desc: "Stop recording and Hikanest instantly surfaces answers, suggestions, and key points.",
       color: "#a78bfa",
     },
   ];
@@ -66,7 +73,7 @@ export default function Landing() {
     { icon: Brain, title: "Instant AI Answers", desc: "AI analyzes what was said and surfaces answers, context, and action items in seconds.", color: "#8b5cf6" },
     { icon: EyeOff, title: "Transparent Overlay", desc: "Floating overlay mode — invisible to screen share, always on top while you meet.", color: "#a78bfa" },
     { icon: History, title: "Session History", desc: "Every meeting saved with full transcript and AI insight timeline for future reference.", color: "#7c3aed" },
-    { icon: FileText, title: "Ask Anything", desc: "Type a custom question anytime — Hika uses the full conversation context to answer.", color: "#6366f1" },
+    { icon: FileText, title: "Ask Anything", desc: "Type a custom question anytime — Hikanest uses the full conversation context to answer.", color: "#6366f1" },
     { icon: Shield, title: "Privacy First", desc: "Audio processed in real time, never stored. Your conversations stay private.", color: "#8b5cf6" },
   ];
 
@@ -94,7 +101,7 @@ export default function Landing() {
         "When someone speaks, tap the purple mic button",
         "Watch the live transcript build in real time (left panel)",
         "Tap the red stop button when done speaking",
-        "Hika instantly analyzes and shows AI answers (right panel)",
+        "Hikanest instantly analyzes and shows AI answers (right panel)",
         "Repeat for each segment of your meeting",
       ],
     },
@@ -111,7 +118,7 @@ export default function Landing() {
     {
       title: "Tips & Tricks",
       steps: [
-        'Type a custom question in the "Ask Hika" box anytime',
+        'Type a custom question in the "Ask Hikanest" box anytime',
         "Past sessions are saved under History in the sidebar",
         "Use the overlay in full-screen meeting mode for best results",
         "Click End to save the session and stop all recording",
@@ -129,7 +136,7 @@ export default function Landing() {
           style={{ background: "linear-gradient(90deg, #6366f1, #8b5cf6)", boxShadow: "0 2px 20px rgba(99,102,241,0.4)" }}>
           <div className="flex items-center gap-3">
             <Download size={16} className="text-white flex-shrink-0" />
-            <p className="text-sm font-medium">Install Hika.ai for a native desktop experience</p>
+            <p className="text-sm font-medium">Install Hikanest for a native desktop experience</p>
           </div>
           <div className="flex items-center gap-2 flex-shrink-0">
             <button onClick={handleInstall}
@@ -147,23 +154,37 @@ export default function Landing() {
       <nav className="flex items-center justify-between px-6 md:px-12 py-5 border-b border-white/[0.06]"
         style={{ paddingTop: installBanner && !installed ? "4.5rem" : undefined }}>
         <div className="flex items-center gap-2.5">
-          <div className="w-8 h-8 rounded-xl flex items-center justify-center"
-            style={{ background: "linear-gradient(135deg, #6366f1, #8b5cf6)", boxShadow: "0 0 16px rgba(99,102,241,0.5)" }}>
-            <Zap size={16} color="#fff" fill="#fff" />
-          </div>
-          <span className="text-base font-bold tracking-tight">Hika.ai</span>
+          <img src="/icons/icon.png" alt="Hikanest" className="w-8 h-8 rounded-xl object-cover shadow-[0_0_16px_rgba(99,102,241,0.5)]" />
+          <span className="text-base font-bold tracking-tight">Hikanest</span>
         </div>
         <div className="hidden md:flex items-center gap-8 text-sm text-white/50">
+          <button onClick={() => navigate("/install")} className="hover:text-white transition-colors">Desktop App</button>
           <a href="#features" className="hover:text-white transition-colors">Features</a>
           <a href="#how-it-works" className="hover:text-white transition-colors">How it works</a>
           <a href="#docs" className="hover:text-white transition-colors">Docs</a>
-          <a href="#install" className="hover:text-white transition-colors">Install</a>
         </div>
-        <button onClick={() => navigate("/session")}
-          className="flex items-center gap-2 text-sm font-semibold px-4 py-2 rounded-xl transition-all hover:opacity-90 active:scale-[0.97]"
-          style={{ background: "linear-gradient(135deg, #6366f1, #8b5cf6)", boxShadow: "0 4px 16px rgba(99,102,241,0.35)" }}>
-          Launch App <ArrowRight size={14} />
-        </button>
+        <div className="flex items-center gap-3">
+          <button
+            className="text-sm px-4 py-2 rounded-xl border border-white/15 bg-white/[0.05] text-white/75"
+            title={sessionEmail || "Signed in user"}
+          >
+            {sessionEmail ? `Signed in: ${sessionEmail}` : "Signed in"}
+          </button>
+          <button
+            onClick={() => {
+              void signOut();
+              navigate("/login");
+            }}
+            className="text-sm font-semibold px-4 py-2 rounded-xl border border-white/15 bg-white/[0.05] hover:bg-white/[0.09] transition-all"
+          >
+            Logout
+          </button>
+          <button onClick={() => navigate("/session")}
+            className="flex items-center gap-2.5 text-sm font-semibold px-4 py-2 rounded-xl transition-all hover:opacity-90 active:scale-[0.97]"
+            style={{ background: "linear-gradient(135deg, #6366f1, #8b5cf6)", boxShadow: "0 4px 16px rgba(99,102,241,0.35)" }}>
+            Launch App <ArrowRight size={14} />
+          </button>
+        </div>
       </nav>
 
       {/* ── Hero ── */}
@@ -191,7 +212,7 @@ export default function Landing() {
           </h1>
 
           <p className="text-lg md:text-xl text-white/50 leading-relaxed max-w-2xl mx-auto mb-10">
-            Hika listens while you meet — building a live transcript and surfacing AI answers
+            Hikanest listens while you meet — building a live transcript and surfacing AI answers
             the moment you need them, inside Zoom, Teams, and Google Meet.
           </p>
 
@@ -221,10 +242,10 @@ export default function Landing() {
                 <CheckCircle size={15} />App Installed!
               </span>
             ) : (
-              <a href="#install"
+              <button onClick={() => navigate("/install")}
                 className="flex items-center gap-2.5 text-base font-semibold px-8 py-4 rounded-2xl border border-white/15 bg-white/[0.05] hover:bg-white/[0.09] transition-all">
-                <Download size={16} />How to Install
-              </a>
+                <Download size={16} />Install Desktop App
+              </button>
             )}
           </div>
         </div>
@@ -241,7 +262,7 @@ export default function Landing() {
               <span className="w-3 h-3 rounded-full bg-amber-500/60" />
               <span className="w-3 h-3 rounded-full bg-emerald-500/60" />
             </div>
-            <div className="flex-1 text-center text-xs text-white/25 font-mono">hika.ai/session</div>
+            <div className="flex-1 text-center text-xs text-white/25 font-mono">hikanest.ai/session</div>
           </div>
           {/* Mock session bar */}
           <div className="flex items-center gap-3 px-5 py-3 border-b border-white/[0.07] bg-white/[0.015]">
@@ -309,7 +330,7 @@ export default function Landing() {
         <div className="max-w-5xl mx-auto">
           <div className="text-center mb-14">
             <p className="text-xs font-bold uppercase tracking-widest text-indigo-400 mb-3">Simple · Fast · Powerful</p>
-            <h2 className="text-4xl font-extrabold tracking-tight">How Hika works</h2>
+            <h2 className="text-4xl font-extrabold tracking-tight">How Hikanest works</h2>
           </div>
           <div className="grid md:grid-cols-3 gap-6">
             {STEPS.map((step, i) => (
@@ -360,7 +381,7 @@ export default function Landing() {
         <div className="max-w-5xl mx-auto">
           <div className="text-center mb-14">
             <p className="text-xs font-bold uppercase tracking-widest text-indigo-400 mb-3">User Guide</p>
-            <h2 className="text-4xl font-extrabold tracking-tight">How to use Hika</h2>
+            <h2 className="text-4xl font-extrabold tracking-tight">How to use Hikanest</h2>
             <p className="text-white/40 mt-3 text-sm">Everything you need to get started and get the most out of every meeting</p>
           </div>
           <div className="grid md:grid-cols-2 gap-5">
@@ -398,15 +419,15 @@ export default function Landing() {
                 style={{ background: "linear-gradient(135deg, #6366f1, #8b5cf6)", boxShadow: "0 0 32px rgba(99,102,241,0.5)" }}>
                 <Download size={28} className="text-white" />
               </div>
-              <h2 className="text-3xl font-extrabold mb-3">Install Hika on your laptop</h2>
+              <h2 className="text-3xl font-extrabold mb-3">Install Hikanest on your laptop</h2>
               <p className="text-white/50 mb-8 text-sm leading-relaxed max-w-lg mx-auto">
-                Install Hika as a desktop app — no download required. Works like a native app,
+                Install Hikanest as a desktop app — no download required. Works like a native app,
                 opens in its own window, and keeps your meetings organized.
               </p>
 
               <div className="grid sm:grid-cols-3 gap-4 mb-8 text-left">
                 {[
-                  { icon: "🌐", browser: "Chrome / Edge", steps: "Open Hika → Click ⊕ in address bar → Install" },
+                  { icon: "🌐", browser: "Chrome / Edge", steps: "Open Hikanest → Click ⊕ in address bar → Install" },
                   { icon: "🦊", browser: "Firefox", steps: "Not supported yet. Use Chrome for install." },
                   { icon: "🍎", browser: "Safari (Mac)", steps: "File menu → Add to Dock → Done" },
                 ].map((b) => (
@@ -423,11 +444,11 @@ export default function Landing() {
                   <button onClick={handleInstall}
                     className="flex items-center gap-2.5 text-base font-bold px-8 py-4 rounded-2xl transition-all hover:opacity-90"
                     style={{ background: "linear-gradient(135deg, #6366f1, #8b5cf6)", boxShadow: "0 8px 32px rgba(99,102,241,0.4)" }}>
-                    <Download size={16} />Install Hika Now
+                    <Download size={16} />Install Hikanest Now
                   </button>
                 ) : installed ? (
                   <span className="flex items-center gap-2 text-sm text-emerald-400 border border-emerald-500/25 bg-emerald-500/10 px-6 py-3 rounded-2xl font-semibold">
-                    <CheckCircle size={15} />Hika is installed!
+                    <CheckCircle size={15} />Hikanest is installed!
                   </span>
                 ) : (
                   <p className="text-sm text-white/30">Open this page in Chrome or Edge to see the install button</p>
@@ -446,11 +467,8 @@ export default function Landing() {
       <footer className="border-t border-white/[0.06] px-6 md:px-16 py-10">
         <div className="max-w-5xl mx-auto flex flex-col md:flex-row items-center justify-between gap-6">
           <div className="flex items-center gap-2.5">
-            <div className="w-7 h-7 rounded-lg flex items-center justify-center"
-              style={{ background: "linear-gradient(135deg, #6366f1, #8b5cf6)" }}>
-              <Zap size={13} color="#fff" fill="#fff" />
-            </div>
-            <span className="text-sm font-bold">Hika.ai</span>
+            <img src="/icons/icon.png" alt="Hikanest" className="w-7 h-7 rounded-lg object-cover" />
+            <span className="text-sm font-bold">Hikanest</span>
             <span className="text-white/20 text-xs">— AI Meeting Assistant</span>
           </div>
           <div className="flex items-center gap-6 text-xs text-white/30">

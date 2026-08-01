@@ -96,7 +96,7 @@ export default function Sessions() {
       ) : (
         <ScrollArea className="flex-1">
           <div className="space-y-2 pr-2">
-            {sessions.map((session, i) => {
+            {sessions.map((session: any, i: number) => {
               const PlatformIcon = PLATFORM_ICONS[session.platform] ?? Globe;
               return (
                 <div

@@ -7,3 +7,5 @@ export {
   detectAudioFormat,
   type AudioFormat,
 } from "./audio";
+
+export { realtimeService, RealtimeService } from "./realtime";

@@ -2,6 +2,7 @@
   "name": "workspace",
   "version": "0.0.0",
   "license": "MIT",
+  "packageManager": "pnpm@10.14.0",
   "scripts": {
     "build": "pnpm run typecheck && pnpm -r --if-present run build",
     "typecheck:libs": "tsc --build",
@@ -9,6 +10,8 @@
   },
   "private": true,
   "devDependencies": {
+    "electron": "32.3.3",
+    "electron-builder": "^25.1.8",
     "prettier": "^3.8.4",
     "typescript": "~5.9.3"
   },

@@ -1,9 +1,11 @@
 import { pgTable, serial, text, timestamp, integer } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
+import { users } from "./users";
 
 export const sessions = pgTable("sessions", {
   id: serial("id").primaryKey(),
+  userId: integer("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
   title: text("title").notNull(),
   platform: text("platform").notNull().default("other"),
   status: text("status").notNull().default("active"),
@@ -14,6 +16,7 @@ export const sessions = pgTable("sessions", {
 
 export const insertSessionSchema = createInsertSchema(sessions).omit({
   id: true,
+  userId: true,
   insightCount: true,
   createdAt: true,
   endedAt: true,

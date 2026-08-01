@@ -1,8 +1,10 @@
 import { Mic, MicOff, Zap, ChevronDown, ChevronUp, X, Sparkles } from "lucide-react";
+import InsightAnswer from "@/components/InsightAnswer";
 
 export type OverlayInsight = {
   question: string;
   answer: string;
+  sections?: Array<{ type?: string; title?: string; content?: string; language?: string | null }>;
   suggestions: string[];
   confidence: string;
   timestamp: string;
@@ -62,26 +64,24 @@ export default function PiPOverlayContent({
           background: "rgba(255,255,255,0.02)",
           flexShrink: 0,
           gap: 8,
-        }}
+          WebkitAppRegion: "drag"
+        } as React.CSSProperties}
       >
         {/* Logo + status */}
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <div
+          <img
+            src="/icons/icon.png"
+            alt="Hikanest"
             style={{
               width: 22,
               height: 22,
               borderRadius: 6,
-              background: "linear-gradient(135deg, #6366f1, #8b5cf6)",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
+              objectFit: "cover",
               boxShadow: "0 0 10px rgba(99,102,241,0.4)",
               flexShrink: 0,
             }}
-          >
-            <Zap size={12} color="#fff" fill="#fff" />
-          </div>
-          <span style={{ fontSize: 12, fontWeight: 600, letterSpacing: "0.02em" }}>Hika</span>
+          />
+          <span style={{ fontSize: 12, fontWeight: 600, letterSpacing: "0.02em" }}>Hikanest</span>
           {isAnalyzing && (
             <span style={{ fontSize: 10, color: colors.primary, display: "flex", alignItems: "center", gap: 3 }}>
               <Sparkles size={9} />
@@ -95,6 +95,7 @@ export default function PiPOverlayContent({
           <button
             onClick={onToggleMic}
             style={{
+              WebkitAppRegion: "no-drag",
               display: "flex",
               alignItems: "center",
               gap: 4,
@@ -107,7 +108,7 @@ export default function PiPOverlayContent({
               background: micActive ? colors.primaryGlow : "transparent",
               color: micActive ? colors.primary : colors.muted,
               transition: "all 0.15s",
-            }}
+            } as React.CSSProperties}
           >
             {micActive ? (
               <>
@@ -124,10 +125,11 @@ export default function PiPOverlayContent({
             )}
           </button>
 
-          <button onClick={onCollapse} style={iconBtnStyle}>
+          <button onClick={onCollapse} style={{ ...iconBtnStyle, WebkitAppRegion: "no-drag" } as React.CSSProperties}>
             {collapsed ? <ChevronDown size={13} /> : <ChevronUp size={13} />}
           </button>
-          <button onClick={onClose} style={iconBtnStyle}>
+          <button onClick={onClose} style={{ ...iconBtnStyle, WebkitAppRegion: "no-drag" } as React.CSSProperties}
+>
             <X size={13} />
           </button>
         </div>
@@ -168,15 +170,7 @@ export default function PiPOverlayContent({
                 border: `1px solid rgba(129,140,248,0.15)`,
                 borderRadius: 10, padding: "10px 12px",
               }}>
-                <p style={{
-                  fontSize: 13, lineHeight: 1.6, color: colors.text, margin: 0,
-                  overflow: "hidden",
-                  display: "-webkit-box",
-                  WebkitLineClamp: 6,
-                  WebkitBoxOrient: "vertical",
-                }}>
-                  {insight.answer}
-                </p>
+                <InsightAnswer answer={insight.answer} sections={insight.sections} compact className="text-slate-100" />
               </div>
 
               {/* Suggestions */}

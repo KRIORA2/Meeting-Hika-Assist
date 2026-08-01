@@ -91,6 +91,7 @@ export interface AnalyzeResult {
   /** The question or topic detected in the transcript that was answered */
   question: string;
   answer: string;
+  domain: string;
   suggestions: string[];
   confidence: AnalyzeResultConfidence;
   sections?: AISection[];

@@ -1,16 +1,16 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { motion } from "framer-motion";
 import { Mic, Monitor, Volume2, Sliders, Shield, Keyboard, Bell } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 function Section({ title, icon: Icon, children }: { title: string; icon: React.ElementType; children: React.ReactNode }) {
   return (
-    <div className="bg-card border border-card-border rounded-xl overflow-hidden">
-      <div className="flex items-center gap-2.5 px-5 py-3.5 border-b border-card-border">
-        <Icon size={14} className="text-muted-foreground" />
-        <h3 className="text-sm font-semibold">{title}</h3>
+    <div className="rounded-2xl border border-white/10 bg-white/[0.04] overflow-hidden shadow-[0_10px_30px_rgba(0,0,0,0.16)] backdrop-blur-xl">
+      <div className="flex items-center gap-2.5 px-5 py-3.5 border-b border-white/10">
+        <Icon size={14} className="text-[#8b5cf6]" />
+        <h3 className="text-sm font-semibold text-white">{title}</h3>
       </div>
-      <div className="divide-y divide-card-border">{children}</div>
+      <div className="divide-y divide-white/10">{children}</div>
     </div>
   );
 }
@@ -66,23 +66,35 @@ export default function Settings() {
   const [notifications, setNotifications] = useState(false);
   const [audioDevice, setAudioDevice] = useState("default");
   const [language, setLanguage] = useState("en");
-  const [model, setModel] = useState("gpt-4o-mini");
+  const [model, setModel] = useState(() => {
+    if (typeof window === "undefined") return "gpt-4.1";
+    return window.localStorage.getItem("hika-ai-model") || "gpt-4.1";
+  });
   const [overlayOpacity, setOverlayOpacity] = useState(85);
   const [chunkSize, setChunkSize] = useState(8);
+
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      window.localStorage.setItem("hika-ai-model", model);
+    }
+  }, [model]);
 
   return (
     <div className="h-full overflow-y-auto">
       <div className="max-w-2xl mx-auto px-8 py-8 space-y-6">
-        <div>
-          <h1 className="text-xl font-semibold tracking-tight">Settings</h1>
-          <p className="text-sm text-muted-foreground mt-1">Configure Hika to match your workflow</p>
+        <div className="rounded-3xl border border-white/10 bg-white/[0.04] p-5 shadow-[0_10px_30px_rgba(0,0,0,0.2)] backdrop-blur-xl">
+          <div className="inline-flex items-center gap-2 rounded-full border border-[#6c63ff]/30 bg-[#6c63ff]/10 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.24em] text-[#c8b9ff] mb-3">
+            <Sliders size={12} /> Control center
+          </div>
+          <h1 className="text-xl font-semibold tracking-tight text-white">Settings</h1>
+          <p className="text-sm text-white/55 mt-1">Fine-tune Hikanest to feel instant, private, and effortless.</p>
         </div>
 
         <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} className="space-y-4">
           <Section title="Microphone & Audio" icon={Mic}>
             <Row
               label="Input Device"
-              description="Select which microphone Hika listens to"
+              description="Select which microphone Hikanest listens to"
             >
               <Select
                 value={audioDevice}
@@ -132,8 +144,9 @@ export default function Settings() {
               <Select
                 value={model}
                 options={[
+                  { label: "GPT-4.1 (most accurate)", value: "gpt-4.1" },
+                  { label: "GPT-4o (balanced)", value: "gpt-4o" },
                   { label: "GPT-4o mini (fast)", value: "gpt-4o-mini" },
-                  { label: "GPT-4o (accurate)", value: "gpt-4o" },
                 ]}
                 onChange={setModel}
               />
@@ -184,7 +197,7 @@ export default function Settings() {
             <Row label="Toggle mic" description="Start or stop recording">
               <kbd className="text-xs bg-muted border border-border rounded px-2 py-1 font-mono">⌘ + M</kbd>
             </Row>
-            <Row label="Ask Hika" description="Manually trigger AI analysis">
+            <Row label="Ask Hikanest" description="Manually trigger AI analysis">
               <kbd className="text-xs bg-muted border border-border rounded px-2 py-1 font-mono">⌘ + ↵</kbd>
             </Row>
             <Row label="Toggle stealth overlay" description="Show or hide the floating overlay">

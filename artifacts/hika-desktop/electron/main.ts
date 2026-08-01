@@ -1,6 +1,6 @@
 import {
   app, BrowserWindow, Tray, Menu, ipcMain,
-  nativeImage, screen, desktopCapturer, shell,
+  nativeImage, screen, desktopCapturer, shell, safeStorage,
 } from "electron";
 import path from "path";
 import fs from "fs";
@@ -9,6 +9,43 @@ const isDev = !app.isPackaged;
 
 let overlayWindow: BrowserWindow | null = null;
 let tray: Tray | null = null;
+let buildTrayMenu: (() => Menu) | null = null;
+let clickThroughEnabled = false;
+
+const secureStorePath = () => path.join(app.getPath("userData"), "secure-store.json");
+
+function readSecureStore(): Record<string, string> {
+  try {
+    const file = secureStorePath();
+    if (!fs.existsSync(file)) return {};
+    return JSON.parse(fs.readFileSync(file, "utf8")) as Record<string, string>;
+  } catch {
+    return {};
+  }
+}
+
+function writeSecureStore(store: Record<string, string>) {
+  fs.writeFileSync(secureStorePath(), JSON.stringify(store, null, 2), "utf8");
+}
+
+function encryptValue(value: string): string {
+  if (safeStorage.isEncryptionAvailable()) {
+    return safeStorage.encryptString(value).toString("base64");
+  }
+  return Buffer.from(value, "utf8").toString("base64");
+}
+
+function decryptValue(value: string): string | null {
+  try {
+    const buffer = Buffer.from(value, "base64");
+    if (safeStorage.isEncryptionAvailable()) {
+      return safeStorage.decryptString(buffer);
+    }
+    return buffer.toString("utf8");
+  } catch {
+    return null;
+  }
+}
 
 // Meeting apps to auto-detect (window title substrings)
 const MEETING_APPS = [
@@ -24,6 +61,13 @@ const MEETING_APPS = [
 function createOverlay() {
   const { width, height } = screen.getPrimaryDisplay().workAreaSize;
 
+  const assetsDir = isDev
+    ? path.join(__dirname, "../../assets")
+    : path.join(process.resourcesPath, "assets");
+  const iconPath = process.platform === "win32"
+    ? path.join(assetsDir, "icon.ico")
+    : path.join(assetsDir, "icon.png");
+
   overlayWindow = new BrowserWindow({
     width: 620,
     height: 680,
@@ -32,10 +76,12 @@ function createOverlay() {
     frame: false,
     transparent: true,
     alwaysOnTop: true,
+    movable: true,
     resizable: true,
     skipTaskbar: true,
     hasShadow: true,
     roundedCorners: true,
+    icon: fs.existsSync(iconPath) ? iconPath : undefined,
     webPreferences: {
       preload: path.join(__dirname, "preload-overlay.js"),
       contextIsolation: true,
@@ -57,7 +103,7 @@ function createOverlay() {
 
   overlayWindow.loadFile(overlayHtml);
 
-  if (isDev) {
+  if (isDev && process.env.HIKA_DESKTOP_OPEN_DEVTOOLS === "1") {
     overlayWindow.webContents.openDevTools({ mode: "detach" });
   }
 
@@ -66,6 +112,7 @@ function createOverlay() {
   // Start meeting auto-detection after window is ready
   overlayWindow.webContents.once("did-finish-load", () => {
     startMeetingDetection();
+    overlayWindow?.webContents.send("clickthrough-changed", clickThroughEnabled);
   });
 }
 
@@ -102,21 +149,26 @@ function startMeetingDetection() {
 
 // ── System tray ───────────────────────────────────────────────────────────────
 function createTray() {
-  const iconPath = path.join(
-    isDev
-      ? path.join(__dirname, "../../assets")
-      : path.join(process.resourcesPath, "assets"),
-    process.platform === "win32" ? "icon.ico"
-      : process.platform === "darwin" ? "icon.icns"
-      : "icon.png",
-  );
+  const assetsDir = isDev
+    ? path.join(__dirname, "../../assets")
+    : path.join(process.resourcesPath, "assets");
 
-  const icon = fs.existsSync(iconPath)
-    ? nativeImage.createFromPath(iconPath)
+  const iconCandidates = process.platform === "win32"
+    ? ["icon.ico", "icon.png"]
+    : process.platform === "darwin"
+      ? ["icon.icns", "icon.png"]
+      : ["icon.png"];
+
+  const resolvedPath = iconCandidates
+    .map((name) => path.join(assetsDir, name))
+    .find((candidate) => fs.existsSync(candidate));
+
+  const icon = resolvedPath
+    ? nativeImage.createFromPath(resolvedPath)
     : nativeImage.createEmpty();
 
   tray = new Tray(icon.isEmpty() ? nativeImage.createEmpty() : icon);
-  tray.setToolTip("Hika — AI Meeting Assistant\nInvisible to screen capture");
+  tray.setToolTip("Hikanest — AI Meeting Assistant\nInvisible to screen capture");
 
   const buildMenu = () =>
     Menu.buildFromTemplate([
@@ -129,6 +181,12 @@ function createTray() {
         label: "Hide Overlay",
         enabled: overlayWindow?.isVisible() ?? false,
         click: () => overlayWindow?.hide(),
+      },
+      {
+        label: "Click-Through",
+        type: "checkbox",
+        checked: clickThroughEnabled,
+        click: (item) => setClickThrough(item.checked),
       },
       { type: "separator" },
       {
@@ -146,9 +204,10 @@ function createTray() {
         click: () => shell.openPath(app.getPath("logs")),
       },
       { type: "separator" },
-      { label: "Quit Hika", click: () => app.quit() },
+      { label: "Quit Hikanest", click: () => app.quit() },
     ]);
 
+  buildTrayMenu = buildMenu;
   tray.setContextMenu(buildMenu());
   tray.on("right-click", () => tray?.setContextMenu(buildMenu()));
   tray.on("click", () => {
@@ -164,10 +223,23 @@ ipcMain.handle("get-api-url", () => {
   return process.env.HIKA_API_URL ?? "http://localhost:5000";
 });
 
+ipcMain.handle("get-google-client-id", () => {
+  return process.env.HIKA_GOOGLE_CLIENT_ID ?? process.env.GOOGLE_CLIENT_ID ?? "";
+});
+
 // Toggle click-through mode
 ipcMain.handle("set-clickthrough", (_e, enabled: boolean) => {
-  overlayWindow?.setIgnoreMouseEvents(enabled, { forward: true });
+  setClickThrough(enabled);
 });
+
+function setClickThrough(enabled: boolean) {
+  clickThroughEnabled = enabled;
+  overlayWindow?.setIgnoreMouseEvents(enabled, { forward: true });
+  overlayWindow?.webContents.send("clickthrough-changed", enabled);
+  if (tray && buildTrayMenu) {
+    tray.setContextMenu(buildTrayMenu());
+  }
+}
 
 // Resize from renderer drag handle
 ipcMain.handle("set-size", (_e, width: number, height: number) => {
@@ -189,11 +261,30 @@ ipcMain.handle("capture-screen", async () => {
   }
 });
 
+ipcMain.handle("secure-storage-get", (_e, key: string) => {
+  const store = readSecureStore();
+  const value = store[key];
+  return value ? decryptValue(value) : null;
+});
+
+ipcMain.handle("secure-storage-set", (_e, key: string, value: string) => {
+  const store = readSecureStore();
+  store[key] = encryptValue(value);
+  writeSecureStore(store);
+});
+
+ipcMain.handle("secure-storage-delete", (_e, key: string) => {
+  const store = readSecureStore();
+  delete store[key];
+  writeSecureStore(store);
+});
+
 // Show / hide / pin
 ipcMain.on("overlay-hide", () => overlayWindow?.hide());
 ipcMain.on("overlay-pin",  () => {
   overlayWindow?.setAlwaysOnTop(true, "screen-saver", 1);
 });
+ipcMain.on("overlay-close", () => app.quit());
 
 // ── App lifecycle ─────────────────────────────────────────────────────────────
 app.whenReady().then(() => {

@@ -1,4 +1,4 @@
-const CACHE = "hika-v1";
+const CACHE = "hikanest-v2-icons";
 const SHELL = ["/", "/session", "/manifest.json"];
 
 self.addEventListener("install", (e) => {

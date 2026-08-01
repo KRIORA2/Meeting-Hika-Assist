@@ -1,0 +1,11 @@
+services:
+  - type: static_site
+    name: hikanest-web-beta
+    env: static
+    rootDir: .
+    buildCommand: pnpm install --frozen-lockfile && pnpm --filter @workspace/hika run build
+    publishPath: artifacts/hika/dist/public
+    routes:
+      - type: rewrite
+        source: /*
+        destination: /index.html

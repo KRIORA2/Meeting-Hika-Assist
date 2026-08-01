@@ -34,7 +34,7 @@ export default function Documents() {
         <div>
           <h1 className="text-xl font-semibold tracking-tight">Knowledge Sources</h1>
           <p className="text-sm text-muted-foreground mt-1">
-            Connect documents and tools so Hika can answer with your context
+            Connect documents and tools so Hikanest can answer with your context
           </p>
         </div>
 
@@ -107,7 +107,7 @@ export default function Documents() {
           <div>
             <p className="text-sm font-medium mb-0.5">No sources connected yet</p>
             <p className="text-xs text-muted-foreground leading-relaxed">
-              Once connected, Hika will automatically pull relevant context from your documents when answering questions during meetings. This dramatically improves answer accuracy for your team's specific systems and workflows.
+              Once connected, Hikanest will automatically pull relevant context from your documents when answering questions during meetings. This dramatically improves answer accuracy for your team's specific systems and workflows.
             </p>
           </div>
         </div>

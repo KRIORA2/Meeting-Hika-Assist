@@ -46,7 +46,7 @@ export default function History() {
     query: { queryKey: getListSessionsQueryKey() },
   });
 
-  const filtered = sessions.filter((s) => {
+  const filtered = sessions.filter((s: any) => {
     const matchesSearch =
       !search || s.title.toLowerCase().includes(search.toLowerCase());
     const matchesFilter =
@@ -61,39 +61,42 @@ export default function History() {
     <div className="h-full overflow-y-auto">
       <div className="max-w-4xl mx-auto px-8 py-8 space-y-6">
         {/* Header */}
-        <div>
-          <h1 className="text-xl font-semibold tracking-tight">Session History</h1>
-          <p className="text-sm text-muted-foreground mt-1">
-            Browse and review all past meeting sessions
+        <div className="rounded-[28px] border border-white/10 bg-[rgba(10,11,20,0.86)] p-5 shadow-[0_20px_60px_rgba(0,0,0,0.24)] backdrop-blur-2xl">
+          <div className="inline-flex items-center gap-2 rounded-full border border-[#6c63ff]/30 bg-[#6c63ff]/10 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.24em] text-[#c8b9ff] mb-3">
+            <HistoryIcon size={12} /> Session History
+          </div>
+          <h1 className="text-xl font-semibold tracking-tight text-white">Session History</h1>
+          <p className="text-sm text-white/55 mt-1">
+            Browse and review all past meeting sessions in one refined workspace.
           </p>
         </div>
 
         {/* Controls */}
         <div className="flex items-center gap-3">
           <div className="relative flex-1">
-            <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
+            <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-white/40" />
             <input
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               placeholder="Search sessions…"
-              className="w-full bg-card border border-card-border rounded-lg pl-9 pr-4 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-ring"
+              className="w-full bg-white/[0.04] border border-white/10 rounded-2xl pl-9 pr-4 py-2.5 text-sm text-white placeholder:text-white/30 focus:outline-none focus:ring-1 focus:ring-[#6c63ff]"
             />
           </div>
-          <div className="flex items-center gap-1 bg-card border border-card-border rounded-lg p-1">
+          <div className="flex items-center gap-1 rounded-2xl border border-white/10 bg-white/[0.04] p-1">
             {[
               { id: "all", label: "All" },
               { id: "teams", label: "Teams" },
               { id: "zoom", label: "Zoom" },
               { id: "meet", label: "Meet" },
-            ].map((f) => (
+            ].map((f: any) => (
               <button
                 key={f.id}
                 onClick={() => setFilter(f.id)}
                 className={cn(
-                  "text-xs px-3 py-1.5 rounded-md transition-colors",
+                  "text-xs px-3 py-1.5 rounded-xl transition-colors",
                   filter === f.id
-                    ? "bg-primary text-primary-foreground"
-                    : "text-muted-foreground hover:text-foreground"
+                    ? "bg-[#6c63ff]/15 text-[#c8b9ff]"
+                    : "text-white/50 hover:text-white"
                 )}
               >
                 {f.label}
@@ -106,17 +109,17 @@ export default function History() {
         {isLoading ? (
           <div className="space-y-2">
             {[...Array(5)].map((_, i) => (
-              <div key={i} className="bg-card border border-card-border rounded-xl h-16 animate-pulse" />
+              <div key={i} className="rounded-2xl border border-white/10 bg-white/[0.04] h-16 animate-pulse" />
             ))}
           </div>
         ) : filtered.length === 0 ? (
-          <div className="bg-card border border-card-border rounded-xl p-16 text-center">
-            <HistoryIcon size={32} className="mx-auto mb-4 text-muted-foreground/20" />
-            <p className="text-sm text-muted-foreground">
+          <div className="rounded-[28px] border border-white/10 bg-[rgba(10,11,20,0.86)] p-16 text-center backdrop-blur-2xl">
+            <HistoryIcon size={32} className="mx-auto mb-4 text-white/20" />
+            <p className="text-sm text-white/55">
               {search ? "No sessions match your search" : "No sessions yet"}
             </p>
             {!search && (
-              <Link href="/session" className="text-xs text-primary mt-2 inline-block hover:underline">
+              <Link href="/session" className="text-xs text-[#c8b9ff] mt-2 inline-block hover:underline">
                 Start your first session →
               </Link>
             )}
@@ -124,7 +127,7 @@ export default function History() {
         ) : (
           <AnimatePresence>
             <div className="space-y-2">
-              {filtered.map((session, i) => (
+              {filtered.map((session: any, i: number) => (
                 <motion.div
                   key={session.id}
                   initial={{ opacity: 0, y: 8 }}
@@ -132,7 +135,7 @@ export default function History() {
                   transition={{ delay: i * 0.04, duration: 0.25 }}
                 >
                   <Link href={`/history/${session.id}`}>
-                    <div className="group bg-card border border-card-border rounded-xl px-5 py-4 flex items-center gap-4 hover:border-primary/30 hover:bg-primary/[0.02] transition-all cursor-pointer">
+                    <div className="group rounded-2xl border border-white/10 bg-white/[0.04] px-5 py-4 flex items-center gap-4 hover:border-[#6c63ff]/35 hover:bg-[#6c63ff]/10 transition-all cursor-pointer backdrop-blur-xl">
                       <div className="text-xl flex-shrink-0 select-none">
                         {platformIcon[session.platform ?? "other"] ?? "⚪"}
                       </div>

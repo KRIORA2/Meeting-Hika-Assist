@@ -100,24 +100,27 @@ export default function Dashboard() {
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.4 }}
         >
-          <h1 className="text-2xl font-semibold tracking-tight">
+          <div className="inline-flex items-center gap-2 rounded-full border border-[#6c63ff]/30 bg-[#6c63ff]/10 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.24em] text-[#c8b9ff] mb-4">
+            <Zap size={12} /> Premium AI workspace
+          </div>
+          <h1 className="text-2xl font-semibold tracking-tight text-white">
             {greeting()}{" "}
             <span
               className="bg-clip-text text-transparent"
-              style={{ backgroundImage: "linear-gradient(135deg, hsl(238 84% 67%), hsl(265 89% 72%))" }}
+              style={{ backgroundImage: "linear-gradient(135deg, #6c63ff, #00e5ff)" }}
             >
               — ready when you are.
             </span>
           </h1>
-          <p className="text-muted-foreground text-sm mt-1">
+          <p className="text-white/55 text-sm mt-1">
             {new Date().toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" })}
-            {" · "}Hika is listening
+            {" · "}Hikanest is listening
           </p>
         </motion.div>
 
         {/* Stats */}
         <div className="grid grid-cols-4 gap-4">
-          {statCards.map((card, i) => (
+          {statCards.map((card: any, i: number) => (
             <motion.div
               key={card.label}
               custom={i}
@@ -157,7 +160,7 @@ export default function Dashboard() {
               </div>
             ) : (
               <div className="space-y-2">
-                {recent.map((session, i) => (
+                {recent.map((session: any, i: number) => (
                   <motion.div
                     key={session.id}
                     custom={i + 4}
@@ -166,7 +169,7 @@ export default function Dashboard() {
                     animate="show"
                   >
                     <Link href={`/history/${session.id}`}>
-                      <div className="group bg-card border border-card-border rounded-xl px-4 py-3 flex items-center gap-4 hover:border-primary/30 hover:bg-primary/[0.03] transition-all cursor-pointer">
+                      <div className="group rounded-2xl border border-white/10 bg-white/[0.04] px-4 py-3 flex items-center gap-4 hover:border-[#6c63ff]/35 hover:bg-[#6c63ff]/10 transition-all cursor-pointer backdrop-blur-xl">
                         <div className="text-lg flex-shrink-0 select-none">
                           {platformIcon[session.platform ?? "other"] ?? "⚪"}
                         </div>
@@ -216,10 +219,10 @@ export default function Dashboard() {
             >
               <Link href="/session">
                 <div
-                  className="relative rounded-xl p-5 cursor-pointer overflow-hidden group"
+                  className="relative rounded-2xl p-5 cursor-pointer overflow-hidden group border border-[#6c63ff]/25"
                   style={{
-                    background: "linear-gradient(135deg, hsl(238 84% 67% / 0.15), hsl(265 89% 72% / 0.12))",
-                    border: "1px solid hsl(238 84% 67% / 0.25)",
+                    background: "linear-gradient(135deg, rgba(108,99,255,0.18), rgba(0,229,255,0.12))",
+                    boxShadow: "inset 0 1px 0 rgba(255,255,255,0.08)",
                   }}
                 >
                   <div className="absolute inset-0 bg-gradient-to-br from-primary/5 to-transparent opacity-0 group-hover:opacity-100 transition-opacity" />
@@ -264,8 +267,8 @@ export default function Dashboard() {
               </h3>
               <div className="space-y-2.5">
                 {[
-                  { label: "Transcription", status: "online", model: "GPT-4o mini" },
-                  { label: "Analysis", status: "online", model: "GPT-4o mini" },
+                  { label: "Transcription", status: "online", model: "GPT-4.1 / GPT-4o Transcribe" },
+                  { label: "Analysis", status: "online", model: "GPT-4.1" },
                   { label: "Knowledge Base", status: "offline", model: "—" },
                 ].map((item) => (
                   <div key={item.label} className="flex items-center gap-2">

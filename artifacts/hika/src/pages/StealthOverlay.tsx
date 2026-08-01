@@ -1,10 +1,12 @@
 import { useEffect, useState, useCallback } from "react";
 import { Mic, MicOff, Zap, Lightbulb, X, ChevronDown, ChevronUp } from "lucide-react";
 import { cn } from "@/lib/utils";
+import InsightAnswer from "@/components/InsightAnswer";
 
 type Insight = {
   question: string;
   answer: string;
+  sections?: Array<{ type?: string; title?: string; content?: string; language?: string | null }>;
   suggestions: string[];
   confidence: string;
   timestamp: string;
@@ -25,7 +27,7 @@ export default function StealthOverlay() {
 
   useEffect(() => {
     document.documentElement.classList.add("dark");
-    document.title = "Hika — Stealth";
+    document.title = "Hikanest — Stealth";
 
     const bc = new BroadcastChannel("hika-stealth");
     bc.onmessage = (e: MessageEvent<ChannelMsg>) => {
@@ -56,7 +58,7 @@ export default function StealthOverlay() {
             <span className="font-mono font-bold text-primary-foreground text-[10px]">H</span>
           </div>
           <span className="text-xs font-semibold text-muted-foreground tracking-wide uppercase">
-            Hika Stealth
+            Hikanest Stealth
           </span>
           {isAnalyzing && (
             <span className="flex items-center gap-1 text-primary text-xs animate-pulse">
@@ -126,7 +128,7 @@ export default function StealthOverlay() {
                   <p className="text-[10px] text-muted-foreground font-mono mb-1 leading-tight truncate max-w-[300px]">
                     {insight.question}
                   </p>
-                  <p className="text-sm leading-relaxed">{insight.answer}</p>
+                  <InsightAnswer answer={insight.answer} sections={insight.sections} compact />
                 </div>
               </div>
 
@@ -165,7 +167,7 @@ export default function StealthOverlay() {
           ) : (
             <div className="flex flex-col items-center justify-center py-6 text-center text-muted-foreground">
               <Zap size={22} className="mb-2 opacity-30" />
-              <p className="text-xs">Waiting for Hika to detect context…</p>
+              <p className="text-xs">Waiting for Hikanest to detect context…</p>
               <p className="text-[10px] mt-1 opacity-60">Enable mic or ask a question in the main window</p>
             </div>
           )}

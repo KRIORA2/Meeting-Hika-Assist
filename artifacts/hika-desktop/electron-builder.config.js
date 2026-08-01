@@ -1,8 +1,8 @@
 /** @type {import('electron-builder').Configuration} */
 module.exports = {
   appId: "ai.hika.desktop",
-  productName: "Hika",
-  copyright: "Copyright © 2025 Hika.ai",
+  productName: "Hikanest",
+  copyright: "Copyright © 2025 Hikanest",
 
   directories: {
     output: "release",
@@ -21,28 +21,34 @@ module.exports = {
 
   win: {
     target: [{ target: "nsis", arch: ["x64"] }],
-    icon: "assets/icon.ico",
-    artifactName: "Hika-Setup-${version}.${ext}",
+    icon: "icon.ico",
+    signAndEditExecutable: false,
+    artifactName: "Hikanest-Setup.${ext}",
   },
 
   mac: {
     target: [{ target: "dmg", arch: ["x64", "arm64"] }],
-    icon: "assets/icon.icns",
-    artifactName: "Hika-${version}.${ext}",
+    icon: "icon.icns",
+    artifactName: "Hikanest-${version}.${ext}",
     category: "public.app-category.business",
   },
 
   linux: {
     target: [{ target: "AppImage", arch: ["x64"] }],
-    icon: "assets/icon.png",
+    icon: "icon.png",
     category: "Office",
   },
 
   nsis: {
-    oneClick: false,
-    allowToChangeInstallationDirectory: true,
+    oneClick: true,
+    perMachine: false,
+    allowElevation: true,
+    allowToChangeInstallationDirectory: false,
+    installerIcon: "icon.ico",
+    uninstallerIcon: "icon.ico",
+    installerHeaderIcon: "icon.ico",
     createDesktopShortcut: true,
     createStartMenuShortcut: true,
-    shortcutName: "Hika",
+    shortcutName: "Hikanest",
   },
 };

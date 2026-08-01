@@ -3,27 +3,28 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1" />
-    <title>Hika — AI Meeting Assistant</title>
+    <title>Hikanest — AI Meeting Assistant</title>
     <meta name="description" content="Real-time AI Meeting Assistant. Live transcription + instant AI answers inside Zoom, Teams & Meet." />
     <meta name="robots" content="index, follow" />
     <meta name="theme-color" content="#6366f1" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-    <meta name="apple-mobile-web-app-title" content="Hika" />
+    <meta name="apple-mobile-web-app-title" content="Hikanest" />
 
     <!-- PWA manifest -->
-    <link rel="manifest" href="/manifest.json" />
-    <link rel="apple-touch-icon" href="/icons/icon.svg" />
+    <link rel="manifest" href="/manifest.json?v=2" />
+    <link rel="apple-touch-icon" href="/icons/icon-192.png?v=2" />
 
     <!-- OG / Twitter -->
-    <meta property="og:title" content="Hika — AI Meeting Assistant" />
+    <meta property="og:title" content="Hikanest — AI Meeting Assistant" />
     <meta property="og:description" content="Real-time AI Meeting Assistant. Live transcription + instant AI answers." />
     <meta property="og:type" content="website" />
     <meta name="twitter:card" content="summary_large_image" />
-    <meta name="twitter:title" content="Hika — AI Meeting Assistant" />
+    <meta name="twitter:title" content="Hikanest — AI Meeting Assistant" />
     <meta name="twitter:description" content="Real-time AI Meeting Assistant. Live transcription + instant AI answers." />
 
-    <link rel="icon" type="image/svg+xml" href="/icons/icon.svg" />
+    <link rel="icon" type="image/png" sizes="32x32" href="/icons/icon-192.png?v=2" />
+    <link rel="shortcut icon" href="/icons/icon-192.png?v=2" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
@@ -34,7 +35,7 @@
     <script>
       if ('serviceWorker' in navigator) {
         window.addEventListener('load', () => {
-          navigator.serviceWorker.register('/sw.js').catch(() => {});
+          navigator.serviceWorker.register('/sw.js?v=2').catch(() => {});
         });
       }
     </script>

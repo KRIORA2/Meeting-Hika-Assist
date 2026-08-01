@@ -1,16 +1,19 @@
 import { Router, type IRouter } from "express";
 import healthRouter from "./health";
-import sessionsRouter from "./sessions";
-import insightsRouter from "./insights";
-import statsRouter from "./stats";
+import sessionRouter from "./sessions";
 import openaiRouter from "./openai";
+import documentsRouter from "./documents";
+import insightsRouter from "./insights";
+import authRouter from "./auth";
+import { requireAuth } from "../lib/auth";
 
 const router: IRouter = Router();
 
 router.use(healthRouter);
-router.use(sessionsRouter);
-router.use(insightsRouter);
-router.use(statsRouter);
-router.use(openaiRouter);
+router.use(authRouter);
+router.use(requireAuth, sessionRouter);
+router.use(requireAuth, insightsRouter);
+router.use(requireAuth, openaiRouter);
+router.use(requireAuth, documentsRouter);
 
 export default router;

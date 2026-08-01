@@ -160,12 +160,17 @@ export const GetStatsResponse = zod.object({
 export const AnalyzeContextBody = zod.object({
   "transcript": zod.string().describe('Recent meeting transcript text'),
   "screenshotBase64": zod.string().nullish().describe('Optional base64-encoded PNG screenshot of the meeting screen'),
-  "sessionId": zod.number().nullish()
+  "sessionId": zod.number().nullish(),
+  "uploadedDocs": zod.array(zod.object({
+    "id": zod.string(),
+    "name": zod.string()
+  })).optional().describe('Optional uploaded document descriptors (id+name) to provide user documents for context')
 })
 
 export const AnalyzeContextResponse = zod.object({
   "question": zod.string().describe('The question or topic detected in the transcript that was answered'),
   "answer": zod.string(),
+  "domain": zod.string().describe('The detected domain for the response, such as IT, Sales, Marketing, Finance, HR, Operations, Cloud, Data, SAP, AWS, Azure, Analytics, Product, or General Business'),
   "suggestions": zod.array(zod.string()),
   "confidence": zod.enum(['high', 'medium', 'low']),
   "sections": zod.array(zod.object({

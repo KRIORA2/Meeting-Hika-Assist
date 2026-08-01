@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { db } from "@workspace/db";
 import { insights, sessions } from "@workspace/db";
-import { eq, sql } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { CreateInsightBody } from "@workspace/api-zod";
 
 const router = Router();
@@ -12,6 +12,17 @@ router.post("/insights", async (req, res) => {
     res.status(400).json({ error: parsed.error.message });
     return;
   }
+
+  const ownedSession = await db
+    .select({ id: sessions.id })
+    .from(sessions)
+    .where(and(eq(sessions.id, parsed.data.sessionId), eq(sessions.userId, req.authUser!.id)));
+
+  if (!ownedSession[0]) {
+    res.status(404).json({ error: "Session not found" });
+    return;
+  }
+
   const [insight] = await db
     .insert(insights)
     .values({
