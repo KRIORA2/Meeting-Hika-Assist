@@ -3,7 +3,11 @@ import { GoogleOAuthProvider } from "@react-oauth/google";
 import App from "./App";
 import "./index.css";
 
-const googleClientId = import.meta.env.VITE_GOOGLE_CLIENT_ID || "50200838094-agjmlcfjmdtgrlgojbmercf6apvgahjh.apps.googleusercontent.com";
+const googleClientId = import.meta.env.VITE_GOOGLE_CLIENT_ID?.trim();
+
+if (!googleClientId) {
+  console.warn("VITE_GOOGLE_CLIENT_ID is not set. Google Sign-In is disabled.");
+}
 
 createRoot(document.getElementById("root")!).render(
   googleClientId ? (

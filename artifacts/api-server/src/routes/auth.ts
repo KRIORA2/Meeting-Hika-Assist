@@ -15,22 +15,31 @@ import {
 
 const router = Router();
 
-const googleClientId =
-  process.env.GOOGLE_CLIENT_ID ||
-  process.env.HIKA_GOOGLE_CLIENT_ID ||
-  process.env.VITE_GOOGLE_CLIENT_ID ||
-  "";
+function parseAudienceList(value?: string): string[] {
+  if (!value) return [];
+  return value
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
 
-console.log("==================================");
-console.log("GOOGLE_CLIENT_ID =", process.env.GOOGLE_CLIENT_ID);
-console.log("HIKA_GOOGLE_CLIENT_ID =", process.env.HIKA_GOOGLE_CLIENT_ID);
-console.log("Resolved Google Client ID =", googleClientId);
-console.log("==================================");
+const googleAudienceList = [
+  ...parseAudienceList(process.env.GOOGLE_CLIENT_IDS),
+  ...parseAudienceList(process.env.HIKA_GOOGLE_CLIENT_IDS),
+  process.env.GOOGLE_CLIENT_ID,
+  process.env.HIKA_GOOGLE_CLIENT_ID,
+  process.env.VITE_GOOGLE_CLIENT_ID,
+]
+  .map((item) => (item || "").trim())
+  .filter(Boolean);
+
+const googleAudiences = Array.from(new Set(googleAudienceList));
+const googleClientId = googleAudiences[0] || "";
 const googleClient = googleClientId ? new OAuth2Client(googleClientId) : null;
 
 router.get("/auth/google/config", (_req, res) => {
   res.json({
-    enabled: !!googleClientId,
+    enabled: googleAudiences.length > 0,
     clientId: googleClientId || null,
   });
 });
@@ -126,7 +135,7 @@ router.post("/auth/google", async (req, res) => {
   try {
     const ticket = await googleClient.verifyIdToken({
       idToken: parsed.data.idToken,
-      audience: googleClientId,
+      audience: googleAudiences,
     });
     const payload = ticket.getPayload();
     const email = payload?.email?.trim().toLowerCase();
@@ -157,6 +166,7 @@ router.post("/auth/google", async (req, res) => {
     const auth = await createSessionForUser(toAuthUser(user), "google");
     res.json(auth);
   } catch (error) {
+    console.error("Google sign-in verification failed:", error);
     res.status(401).json({ error: "Google sign-in verification failed" });
   }
 });

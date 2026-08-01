@@ -14,7 +14,7 @@ type Mode = "signin" | "signup";
 export default function Login() {
   const [, navigate] = useLocation();
 
-  const googleClientId = import.meta.env.VITE_GOOGLE_CLIENT_ID || "50200838094-agjmlcfjmdtgrlgojbmercf6apvgahjh.apps.googleusercontent.com";
+  const googleClientId = import.meta.env.VITE_GOOGLE_CLIENT_ID?.trim();
   const canUseGoogleLogin = Boolean(googleClientId);
   const [mode, setMode] = useState<Mode>("signin");
   const [email, setEmail] = useState("");

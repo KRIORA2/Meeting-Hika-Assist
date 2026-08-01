@@ -83,24 +83,49 @@ export async function signOut(): Promise<void> {
 }
 
 async function parseApiMessage(response: Response): Promise<string | undefined> {
+  const contentType = response.headers.get("content-type") || "";
+
+  if (contentType.includes("application/json")) {
+    try {
+      const body = await response.json();
+      if (typeof body?.error === "string") return body.error;
+      if (typeof body?.message === "string") return body.message;
+    } catch {
+    }
+  }
+
   try {
-    const body = await response.json();
-    if (typeof body?.error === "string") return body.error;
-    if (typeof body?.message === "string") return body.message;
+    const text = await response.text();
+    if (/internal server error/i.test(text)) {
+      return `Server error (${response.status}). Please check API service logs and environment variables.`;
+    }
   } catch {
   }
+
   return undefined;
 }
 
 async function authPost(path: string, body: Record<string, unknown>): Promise<AuthResult> {
-  const response = await fetch(`${getApiUrl()}/api${path}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
+  let response: Response;
+
+  try {
+    response = await fetch(`${getApiUrl()}/api${path}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  } catch {
+    return {
+      ok: false,
+      message: "Unable to reach the API. Check that your API URL is correct and the server is running.",
+    };
+  }
 
   if (!response.ok) {
-    return { ok: false, message: (await parseApiMessage(response)) || "Authentication failed." };
+    return {
+      ok: false,
+      message: (await parseApiMessage(response)) || `Authentication failed (${response.status}).`,
+    };
   }
 
   const payload = (await response.json()) as AuthResponse;

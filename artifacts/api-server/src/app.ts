@@ -1,4 +1,4 @@
-import express, { type Express } from "express";
+import express, { type Express, type NextFunction, type Request, type Response } from "express";
 import cors from "cors";
 import pinoHttp from "pino-http";
 import router from "./routes";
@@ -30,5 +30,17 @@ app.use(express.json({ limit: "25mb" }));
 app.use(express.urlencoded({ extended: true, limit: "25mb" }));
 
 app.use("/api", router);
+
+app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
+  logger.error({ err }, "Unhandled API error");
+
+  if (err?.type === "entity.parse.failed") {
+    res.status(400).json({ error: "Invalid JSON body" });
+    return;
+  }
+
+  const status = typeof err?.status === "number" ? err.status : 500;
+  res.status(status).json({ error: status >= 500 ? "Internal server error" : "Request failed" });
+});
 
 export default app;
