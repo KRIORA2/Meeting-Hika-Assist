@@ -116,8 +116,9 @@ const copyToast      = $("copy-toast");
 const resizeHandle   = $("resize-handle");
 const wndMinBtn      = $("wnd-min-btn");
 const wndCloseBtn    = $("wnd-close-btn");
-const accessScreen   = $("access-screen");
-const openWebLoginBtn = $("open-web-login-btn");
+const splashScreen   = $("splash-screen");
+const googleSigninScreen = $("google-signin-screen");
+const continueGoogleBtn = $("continue-google-btn");
 const minimizedLauncher = $("minimized-launcher");
 const jobPostUrl      = $("job-post-url");
 const modelSelect     = $("model-select");
@@ -162,6 +163,7 @@ async function init() {
   $("setup-start-btn")?.addEventListener("click", handleStart);
   $("setup-btn")?.addEventListener("click", showSetupScreen);
   $("setup-back-btn")?.addEventListener("click", showStartScreen);
+  continueGoogleBtn?.addEventListener("click", () => openWebHandoff());
   meetingNameEl.addEventListener("keydown", e => { if (e.key === "Enter") handleStart(); });
   document.querySelectorAll(".mode-choice").forEach((button) => {
     button.addEventListener("click", () => {
@@ -186,7 +188,7 @@ async function init() {
     if (availableUpdateUrl) window.hikaElectron?.openExternal(availableUpdateUrl);
   });
   $("open-dashboard-btn")?.addEventListener("click", () => showToast("Dashboard URL is configured on the web app."));
-  $("menu-logout-btn")?.addEventListener("click", async () => { await clearAuthSession(); await clearAuthToken(); accountMenu.hidden = true; showAccessScreen(); });
+  $("menu-logout-btn")?.addEventListener("click", async () => { await clearAuthSession(); await clearAuthToken(); accountMenu.hidden = true; showSetupScreen(); });
   privateOverlay?.addEventListener("change", () => {
     if (!privateOverlay.checked) showToast("Screen-share protection remains enabled for safety.");
     privateOverlay.checked = true;
@@ -208,8 +210,6 @@ async function init() {
   [$("resume-upload"), $("setup-doc-upload")].filter(Boolean).forEach((input) => {
     input.addEventListener("change", async () => uploadDocuments(input.files, setupUploadedList));
   });
-
-  openWebLoginBtn?.addEventListener("click", () => window.hikaElectron?.openExternal("https://hikanest-web-beta.onrender.com/login?next=%2Fdesktop-connect"));
 
   // Electron minimizes/restores the renderer without recreating it. Recover a
   // dead peer after focus, wake, or a network switch without opening duplicates.
@@ -243,8 +243,11 @@ async function init() {
   clickthroughBtn.addEventListener("click", toggleClickThrough);
   updateClickThroughUI();
 
-  if (!authSession) showAccessScreen();
-  else showSetupScreen();
+  setTimeout(() => {
+    splashScreen?.classList.add("hidden");
+    if (authSession) showSetupScreen();
+    else showGoogleSigninScreen();
+  }, 3000);
 
   // Resize handle
   initResize();
@@ -321,7 +324,7 @@ function setFontSize(px) {
 }
 
 function minimizeToLauncher() {
-  screenBeforeMinimize = sessionScreen.style.display !== "none" ? "session" : accessScreen.style.display !== "none" ? "access" : setupScreen.style.display !== "none" ? "setup" : "start";
+  screenBeforeMinimize = sessionScreen.style.display !== "none" ? "session" : googleSigninScreen.style.display !== "none" ? "google" : setupScreen.style.display !== "none" ? "setup" : "start";
   shell.classList.add("launcher-mode");
   window.hikaElectron?.setSize(64, 64);
 }
@@ -329,10 +332,17 @@ function minimizeToLauncher() {
 function restoreFromLauncher() {
   shell.classList.remove("launcher-mode");
   window.hikaElectron?.setSize(620, 680);
-  if (screenBeforeMinimize === "session") sessionScreen.style.display = "flex";
-  else if (screenBeforeMinimize === "access") showAccessScreen();
-  else if (screenBeforeMinimize === "setup") showSetupScreen();
-  else showSetupScreen();
+  if (screenBeforeMinimize === "session") {
+    sessionScreen.style.display = "flex";
+  } else if (screenBeforeMinimize === "google") {
+    showGoogleSigninScreen();
+  } else {
+    showSetupScreen();
+  }
+}
+
+function openWebHandoff() {
+  window.hikaElectron?.openExternal("https://hikanest-web-beta.onrender.com/login?next=%2Fdesktop-connect");
 }
 
 function compareVersions(left, right) {
@@ -455,6 +465,7 @@ function exportSession() {
 // ── Session ───────────────────────────────────────────────────────────────────
 async function handleStart() {
   const title = (setupScreen.style.display !== "none" ? setupMeetingNameEl?.value : meetingNameEl.value).trim() || "Meeting";
+  const startControl = setupScreen.style.display !== "none" ? $("setup-start-btn") : startBtn;
   const jobContext = (jobPostUrl?.value || "").trim();
   const languageContext = outputLanguage?.value ? `Respond in ${outputLanguage.value}.` : "";
   sessionGuidance = [
@@ -465,8 +476,8 @@ async function handleStart() {
   ].filter(Boolean).join("\n");
   forceHttpFallback = false;
   cancelledRealtimeResponseIds.clear();
-  startBtn.disabled   = true;
-  startBtn.textContent = "Starting…";
+  startControl.disabled = true;
+  startControl.textContent = "Starting...";
 
   try {
     const res = await api("POST", "/api/sessions", { title, platform: "teams", status: "active" });
@@ -482,12 +493,12 @@ async function handleStart() {
 
     startTimer();
   } catch (err) {
-    startBtn.disabled    = false;
-    startBtn.textContent = "Start Session";
+    startControl.disabled = false;
+    startControl.textContent = setupScreen.style.display !== "none" ? "Start session" : "Start Session";
     const msg = err instanceof Error ? err.message : String(err || "");
     if (msg.includes(" 401:")) {
-      showAccessScreen();
-      alert("Your desktop session expired. Sign in on the web, then choose Open desktop app in Settings.");
+      openWebHandoff();
+      alert("Opening web sign-in. After you sign in, Hikanest will return to this session setup page.");
       return;
     }
     alert(`Could not connect to Hikanest API.\n\nAPI URL: ${apiUrl}\n\n${msg || "Check your internet connection and the hosted API service."}`);
@@ -1380,16 +1391,8 @@ function updateLoginStatus() {
   if (accountMenuEmail) accountMenuEmail.textContent = authSession?.email || "Not signed in";
 }
 
-function showAccessScreen() {
-  if (accessScreen) accessScreen.style.display = "flex";
-  if (startScreen) startScreen.style.display = "none";
-  if (setupScreen) setupScreen.style.display = "none";
-  if (sessionScreen) sessionScreen.style.display = "none";
-  updateLoginStatus();
-}
-
 function showStartScreen() {
-  if (accessScreen) accessScreen.style.display = "none";
+  if (googleSigninScreen) googleSigninScreen.style.display = "none";
   if (setupScreen) setupScreen.style.display = "none";
   if (sessionScreen) sessionScreen.style.display = "none";
   if (startScreen) startScreen.style.display = "flex";
@@ -1397,10 +1400,17 @@ function showStartScreen() {
 }
 
 function showSetupScreen() {
-  if (accessScreen) accessScreen.style.display = "none";
+  if (googleSigninScreen) googleSigninScreen.style.display = "none";
   if (startScreen) startScreen.style.display = "none";
   if (sessionScreen) sessionScreen.style.display = "none";
   if (setupScreen) setupScreen.style.display = "block";
+}
+
+function showGoogleSigninScreen() {
+  if (startScreen) startScreen.style.display = "none";
+  if (setupScreen) setupScreen.style.display = "none";
+  if (sessionScreen) sessionScreen.style.display = "none";
+  if (googleSigninScreen) googleSigninScreen.style.display = "flex";
 }
 
 async function completeDesktopHandoff(code) {
@@ -1411,7 +1421,7 @@ async function completeDesktopHandoff(code) {
     await setAuthSession(result.session);
     showSetupScreen();
   } catch (error) {
-    showAccessScreen();
+    showSetupScreen();
     alert(error instanceof Error ? error.message : "Desktop sign-in could not be completed.");
   }
 }

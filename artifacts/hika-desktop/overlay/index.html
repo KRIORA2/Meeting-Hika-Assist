@@ -33,13 +33,17 @@
     <img src="icon.png" alt="" />
   </button>
 
-  <!-- ── Web sign-in handoff ── -->
-  <div id="access-screen" style="display:none">
+  <div id="splash-screen" aria-label="Loading Hikanest">
     <div class="access-mark"><img src="icon.png" alt="Hikanest" /></div>
     <h2>Hikanest</h2>
-    <p>Sign in once on the web and Hikanest will continue here automatically.</p>
-    <button id="open-web-login-btn" class="btn-start" type="button">Open web sign-in</button>
-    <p class="access-hint">Keep Hikanest open while you sign in.</p>
+    <div class="splash-line"><span></span></div>
+  </div>
+
+  <div id="google-signin-screen" style="display:none">
+    <div class="access-mark"><img src="icon.png" alt="Hikanest" /></div>
+    <h2>Welcome to Hikanest</h2>
+    <p>Continue with your Google account to sync this desktop app.</p>
+    <button id="continue-google-btn" class="google-continue-btn" type="button"><span>G</span> Continue with Google</button>
   </div>
 
   <!-- ── Start screen ── -->

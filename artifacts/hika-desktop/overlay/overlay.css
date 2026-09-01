@@ -120,7 +120,8 @@ body {
 
 /* ── Start screen ───────────────────────────────────────────────────────────── */
 #start-screen,
-#access-screen {
+#splash-screen,
+#google-signin-screen {
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -131,11 +132,19 @@ body {
   background: radial-gradient(ellipse at top, rgba(109,125,255,0.12), transparent 54%);
 }
 
+#splash-screen { position: absolute; inset: 0; z-index: 40; background: #080b1b; transition: opacity .35s ease, visibility .35s ease; }
+#splash-screen.hidden { opacity: 0; visibility: hidden; pointer-events: none; }
+.google-continue-btn { width: 100%; padding: 11px 14px; border: 1px solid rgba(255,255,255,.2); border-radius: 12px; background: white; color: #202124; font-size: 13px; font-weight: 700; cursor: pointer; }
+.google-continue-btn span { display: inline-block; margin-right: 9px; color: #4285f4; font-size: 17px; font-weight: 800; vertical-align: -1px; }
+#google-signin-screen h2 { font-size: 21px; font-weight: 800; }
+#google-signin-screen p { max-width: 280px; color: var(--muted); font-size: 13px; line-height: 1.5; text-align: center; }
+#splash-screen h2 { font-size: 25px; font-weight: 800; letter-spacing: .03em; }
+.splash-line { width: 154px; height: 3px; overflow: hidden; border-radius: 9px; background: rgba(255,255,255,.1); }
+.splash-line span { display: block; width: 34%; height: 100%; border-radius: inherit; background: linear-gradient(90deg, var(--primary), var(--primary2)); animation: splashLoad 3s linear forwards; }
+@keyframes splashLoad { from { transform: translateX(-105%); } to { transform: translateX(305%); } }
+
 .access-mark { padding: 7px; border-radius: 23px; background: linear-gradient(135deg, rgba(109,125,255,.86), rgba(59,226,255,.45)); box-shadow: 0 0 34px rgba(109,125,255,.48); animation: accessPulse 1.8s ease-in-out infinite; }
 .access-mark img { display: block; width: 70px; height: 70px; border-radius: 17px; object-fit: cover; }
-#access-screen h2 { font-size: 25px; font-weight: 800; letter-spacing: .03em; }
-#access-screen p { max-width: 280px; color: var(--muted); font-size: 13px; line-height: 1.5; text-align: center; }
-.access-hint { color: var(--dim) !important; font-size: 11px !important; }
 @keyframes accessPulse { 50% { transform: translateY(-3px) scale(1.03); box-shadow: 0 0 42px rgba(59,226,255,.36); } }
 
 #setup-screen { overflow-y: auto; padding: 28px; }
