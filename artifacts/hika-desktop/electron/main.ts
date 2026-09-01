@@ -218,9 +218,11 @@ function createTray() {
 
 // ── IPC handlers ──────────────────────────────────────────────────────────────
 
-// Renderer asks for the API server base URL
+const PRODUCTION_API_URL = "https://hikanest-api-v1.onrender.com";
+
+// Development defaults to localhost; packaged builds call the deployed API.
 ipcMain.handle("get-api-url", () => {
-  return process.env.HIKA_API_URL ?? "http://localhost:5000";
+  return process.env.HIKA_API_URL ?? (isDev ? "http://localhost:5000" : PRODUCTION_API_URL);
 });
 
 ipcMain.handle("get-google-client-id", () => {

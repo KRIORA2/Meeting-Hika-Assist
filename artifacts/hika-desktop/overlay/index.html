@@ -33,13 +33,6 @@
     <img src="icon.png" alt="" />
   </button>
 
-  <div id="splash-screen" aria-label="Loading Hikanest">
-    <div class="splash-mark"><img src="icon.png" alt="Hikanest" /></div>
-    <h1>Hikanest</h1>
-    <p>Meeting intelligence, ready when you are.</p>
-    <div class="splash-progress"><span></span></div>
-  </div>
-
   <!-- ── Login screen ── -->
   <div id="login-screen" style="display:none">
     <img class="logo-ring" src="icon.png" alt="Hikanest" />
@@ -59,16 +52,22 @@
   </div>
 
   <!-- ── Start screen ── -->
-  <div id="start-screen" style="display:none">
+  <div id="start-screen">
+    <img class="logo-ring" src="icon.png" alt="Hikanest" />
+    <h2>Hikanest Meeting Assistant</h2>
+    <p>AI Meeting Assistant - invisible to screen share</p>
+    <input id="meeting-name" class="name-input" type="text" placeholder="Meeting name (e.g. Client Call)..." maxlength="80" />
+    <button id="setup-btn" class="ctrl-btn setup-open-btn" type="button">Session setup</button>
+    <button id="start-btn" class="btn-start">Start Session</button>
+  </div>
+
+  <div id="setup-screen" style="display:none">
     <div class="setup-header">
       <img class="setup-logo" src="icon.png" alt="Hikanest" />
       <div><h2>Prepare your session</h2><p>Choose your context and response preferences.</p></div>
-      <button class="credit-button" type="button" title="Credits are managed on the web dashboard">No credits</button>
+      <button id="setup-back-btn" class="credit-button" type="button">Back</button>
     </div>
     <div class="setup-body">
-      <label class="setup-label" for="meeting-name">Session name</label>
-      <input id="meeting-name" class="name-input" type="text" placeholder="e.g. Data Engineer interview" maxlength="80" />
-
       <div class="mode-grid" role="group" aria-label="Session type">
         <button class="mode-choice active" type="button" data-mode="interview">Interview</button>
         <button class="mode-choice" type="button" data-mode="call">Regular call</button>

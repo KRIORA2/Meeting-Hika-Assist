@@ -77,7 +77,7 @@ is required; code changes alone cannot make Windows trust an unsigned app.
 
 | Variable | Default | Description |
 |---|---|---|
-| `HIKA_API_URL` | `http://localhost:5000` | URL of the Hika API server |
+| `HIKA_API_URL` | `https://hikanest-api-v1.onrender.com` in packaged builds; `http://localhost:5000` in development | URL of the Hika API server. Set this only to override the default. |
 
 ## Publishing desktop updates
 

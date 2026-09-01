@@ -79,6 +79,7 @@ function appendRealtimeDelta(current, delta) {
 // ── DOM refs ──────────────────────────────────────────────────────────────────
 const $ = id => document.getElementById(id);
 const startScreen    = $("start-screen");
+const setupScreen    = $("setup-screen");
 const sessionScreen  = $("session-screen");
 const meetingNameEl  = $("meeting-name");
 const sessionGuidanceEl = $("session-guidance");
@@ -122,7 +123,6 @@ const logoutBtn      = $("logout-btn");
 const loginError     = $("login-error");
 const loginStatus    = $("login-status");
 const minimizedLauncher = $("minimized-launcher");
-const splashScreen    = $("splash-screen");
 const jobPostUrl      = $("job-post-url");
 const modelSelect     = $("model-select");
 const outputLanguage  = $("output-language");
@@ -162,6 +162,8 @@ async function init() {
 
   // Event listeners
   startBtn.addEventListener("click", handleStart);
+  $("setup-btn")?.addEventListener("click", showSetupScreen);
+  $("setup-back-btn")?.addEventListener("click", showStartScreen);
   meetingNameEl.addEventListener("keydown", e => { if (e.key === "Enter") handleStart(); });
   document.querySelectorAll(".mode-choice").forEach((button) => {
     button.addEventListener("click", () => {
@@ -255,11 +257,8 @@ async function init() {
   clickthroughBtn.addEventListener("click", toggleClickThrough);
   updateClickThroughUI();
 
-  setTimeout(() => {
-    splashScreen?.classList.add("hidden");
-    if (!authSession) showLoginScreen();
-    else showStartScreen();
-  }, 5000);
+  if (!authSession) showLoginScreen();
+  else showStartScreen();
 
   // Resize handle
   initResize();
@@ -336,7 +335,7 @@ function setFontSize(px) {
 }
 
 function minimizeToLauncher() {
-  screenBeforeMinimize = sessionScreen.style.display !== "none" ? "session" : loginScreen.style.display !== "none" ? "login" : "start";
+  screenBeforeMinimize = sessionScreen.style.display !== "none" ? "session" : loginScreen.style.display !== "none" ? "login" : setupScreen.style.display !== "none" ? "setup" : "start";
   shell.classList.add("launcher-mode");
   window.hikaElectron?.setSize(64, 64);
 }
@@ -346,6 +345,7 @@ function restoreFromLauncher() {
   window.hikaElectron?.setSize(620, 680);
   if (screenBeforeMinimize === "session") sessionScreen.style.display = "flex";
   else if (screenBeforeMinimize === "login") showLoginScreen();
+  else if (screenBeforeMinimize === "setup") showSetupScreen();
   else showStartScreen();
 }
 
@@ -489,6 +489,7 @@ async function handleStart() {
 
     hdrTitle.textContent            = title;
     startScreen.style.display       = "none";
+    setupScreen.style.display       = "none";
     sessionScreen.style.display     = "flex";
     sessionScreen.style.flexDirection = "column";
     sessionScreen.style.height      = "100%";
@@ -1423,15 +1424,24 @@ function updateLoginStatus() {
 function showLoginScreen() {
   if (loginScreen) loginScreen.style.display = "flex";
   if (startScreen) startScreen.style.display = "none";
+  if (setupScreen) setupScreen.style.display = "none";
   if (sessionScreen) sessionScreen.style.display = "none";
   updateLoginStatus();
 }
 
 function showStartScreen() {
   if (loginScreen) loginScreen.style.display = "none";
+  if (setupScreen) setupScreen.style.display = "none";
   if (sessionScreen) sessionScreen.style.display = "none";
   if (startScreen) startScreen.style.display = "flex";
   updateLoginStatus();
+}
+
+function showSetupScreen() {
+  if (loginScreen) loginScreen.style.display = "none";
+  if (startScreen) startScreen.style.display = "none";
+  if (sessionScreen) sessionScreen.style.display = "none";
+  if (setupScreen) setupScreen.style.display = "block";
 }
 
 async function handleLogin() {
