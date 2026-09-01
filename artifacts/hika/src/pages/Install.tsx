@@ -6,7 +6,7 @@ export default function Install() {
 
   const downloads = {
     Windows: {
-      url: "/downloads/windows/Hika-Setup.exe",
+      url: "/downloads/windows/Hikanest-Setup.exe",
       fileName: "Hikanest-Setup.exe",
       available: true,
     },
