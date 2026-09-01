@@ -505,7 +505,7 @@ async function handleStart() {
       alert("Authentication required. Please sign in again.");
       return;
     }
-    alert("Could not connect to Hikanest API.\n\nMake sure the API server is running at " + apiUrl);
+    alert(`Could not connect to Hikanest API.\n\nAPI URL: ${apiUrl}\n\n${msg || "Check your internet connection and the hosted API service."}`);
     console.error(err);
   }
 }
