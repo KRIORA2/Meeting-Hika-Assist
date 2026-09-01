@@ -28,7 +28,7 @@ export default function Login() {
   useEffect(() => {
     const session = getAuthSession();
     if (session) {
-      navigate("/");
+      navigate(getNextUrl());
     }
   }, [navigate]);
 

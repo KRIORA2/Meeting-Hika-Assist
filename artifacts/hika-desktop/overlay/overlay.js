@@ -82,6 +82,7 @@ const startScreen    = $("start-screen");
 const setupScreen    = $("setup-screen");
 const sessionScreen  = $("session-screen");
 const meetingNameEl  = $("meeting-name");
+const setupMeetingNameEl = $("setup-meeting-name");
 const sessionGuidanceEl = $("session-guidance");
 const startBtn       = $("start-btn");
 const hdrTitle       = $("hdr-title");
@@ -115,13 +116,8 @@ const copyToast      = $("copy-toast");
 const resizeHandle   = $("resize-handle");
 const wndMinBtn      = $("wnd-min-btn");
 const wndCloseBtn    = $("wnd-close-btn");
-const loginScreen    = $("login-screen");
-const loginAuthBtn   = $("login-auth-btn");
-const loginEmail     = $("login-email");
-const loginPassword  = $("login-password");
-const logoutBtn      = $("logout-btn");
-const loginError     = $("login-error");
-const loginStatus    = $("login-status");
+const accessScreen   = $("access-screen");
+const openWebLoginBtn = $("open-web-login-btn");
 const minimizedLauncher = $("minimized-launcher");
 const jobPostUrl      = $("job-post-url");
 const modelSelect     = $("model-select");
@@ -163,6 +159,7 @@ async function init() {
 
   // Event listeners
   startBtn.addEventListener("click", handleStart);
+  $("setup-start-btn")?.addEventListener("click", handleStart);
   $("setup-btn")?.addEventListener("click", showSetupScreen);
   $("setup-back-btn")?.addEventListener("click", showStartScreen);
   meetingNameEl.addEventListener("keydown", e => { if (e.key === "Enter") handleStart(); });
@@ -189,7 +186,7 @@ async function init() {
     if (availableUpdateUrl) window.hikaElectron?.openExternal(availableUpdateUrl);
   });
   $("open-dashboard-btn")?.addEventListener("click", () => showToast("Dashboard URL is configured on the web app."));
-  $("menu-logout-btn")?.addEventListener("click", async () => { await clearAuthSession(); await clearAuthToken(); accountMenu.hidden = true; showLoginScreen(); });
+  $("menu-logout-btn")?.addEventListener("click", async () => { await clearAuthSession(); await clearAuthToken(); accountMenu.hidden = true; showAccessScreen(); });
   privateOverlay?.addEventListener("change", () => {
     if (!privateOverlay.checked) showToast("Screen-share protection remains enabled for safety.");
     privateOverlay.checked = true;
@@ -212,12 +209,7 @@ async function init() {
     input.addEventListener("change", async () => uploadDocuments(input.files, setupUploadedList));
   });
 
-  if (loginAuthBtn) {
-    loginAuthBtn.addEventListener("click", handleLogin);
-  }
-  if (loginPassword) {
-    loginPassword.addEventListener("keydown", (e) => { if (e.key === "Enter") handleLogin(); });
-  }
+  openWebLoginBtn?.addEventListener("click", () => window.hikaElectron?.openExternal("https://hikanest-web-beta.onrender.com/login?next=%2Fdesktop-connect"));
 
   // Electron minimizes/restores the renderer without recreating it. Recover a
   // dead peer after focus, wake, or a network switch without opening duplicates.
@@ -231,13 +223,6 @@ async function init() {
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState === "visible") recoverRealtime();
   });
-  if (logoutBtn) {
-    logoutBtn.addEventListener("click", () => {
-      void clearAuthSession();
-      void clearAuthToken();
-      showLoginScreen();
-    });
-  }
 
   if (window.hikaElectron) {
     window.hikaElectron.onClickThroughChanged((enabled) => {
@@ -258,8 +243,8 @@ async function init() {
   clickthroughBtn.addEventListener("click", toggleClickThrough);
   updateClickThroughUI();
 
-  if (!authSession) showLoginScreen();
-  else showStartScreen();
+  if (!authSession) showAccessScreen();
+  else showSetupScreen();
 
   // Resize handle
   initResize();
@@ -336,7 +321,7 @@ function setFontSize(px) {
 }
 
 function minimizeToLauncher() {
-  screenBeforeMinimize = sessionScreen.style.display !== "none" ? "session" : loginScreen.style.display !== "none" ? "login" : setupScreen.style.display !== "none" ? "setup" : "start";
+  screenBeforeMinimize = sessionScreen.style.display !== "none" ? "session" : accessScreen.style.display !== "none" ? "access" : setupScreen.style.display !== "none" ? "setup" : "start";
   shell.classList.add("launcher-mode");
   window.hikaElectron?.setSize(64, 64);
 }
@@ -345,9 +330,9 @@ function restoreFromLauncher() {
   shell.classList.remove("launcher-mode");
   window.hikaElectron?.setSize(620, 680);
   if (screenBeforeMinimize === "session") sessionScreen.style.display = "flex";
-  else if (screenBeforeMinimize === "login") showLoginScreen();
+  else if (screenBeforeMinimize === "access") showAccessScreen();
   else if (screenBeforeMinimize === "setup") showSetupScreen();
-  else showStartScreen();
+  else showSetupScreen();
 }
 
 function compareVersions(left, right) {
@@ -469,7 +454,7 @@ function exportSession() {
 
 // ── Session ───────────────────────────────────────────────────────────────────
 async function handleStart() {
-  const title = meetingNameEl.value.trim() || "Meeting";
+  const title = (setupScreen.style.display !== "none" ? setupMeetingNameEl?.value : meetingNameEl.value).trim() || "Meeting";
   const jobContext = (jobPostUrl?.value || "").trim();
   const languageContext = outputLanguage?.value ? `Respond in ${outputLanguage.value}.` : "";
   sessionGuidance = [
@@ -501,9 +486,8 @@ async function handleStart() {
     startBtn.textContent = "Start Session";
     const msg = err instanceof Error ? err.message : String(err || "");
     if (msg.includes(" 401:")) {
-      showLoginScreen();
-      setError("Your session expired. Please sign in again.");
-      alert("Authentication required. Please sign in again.");
+      showAccessScreen();
+      alert("Your desktop session expired. Sign in on the web, then choose Open desktop app in Settings.");
       return;
     }
     alert(`Could not connect to Hikanest API.\n\nAPI URL: ${apiUrl}\n\n${msg || "Check your internet connection and the hosted API service."}`);
@@ -529,8 +513,9 @@ async function handleEnd() {
   liveTxEl.style.display      = "none";
   meetingBadge.style.display  = "none";
   sessionScreen.style.display = "none";
-  startScreen.style.display   = "flex";
+  showSetupScreen();
   meetingNameEl.value  = "";
+  if (setupMeetingNameEl) setupMeetingNameEl.value = "";
   startBtn.disabled    = false;
   startBtn.textContent = "Start Session";
 }
@@ -1391,39 +1376,12 @@ async function clearAuthSession() {
   updateLoginStatus();
 }
 
-function setError(msg) {
-  if (!loginError) return;
-  loginError.textContent = msg || "";
-  loginError.style.display = msg ? "block" : "none";
-}
-
-function setStatus(msg) {
-  if (loginStatus) loginStatus.textContent = msg || "";
-}
-
-function isValidEmail(value) {
-  return /.+@.+\..+/.test(String(value || "").trim());
-}
-
 function updateLoginStatus() {
-  if (!loginStatus) return;
-
-  const signedInText = authSession?.email
-    ? `Signed in as ${authSession.email} (${authSession.provider || "password"})`
-    : "Not signed in.";
-
-  if (!loginStatus.textContent || loginStatus.textContent.startsWith("Signed in") || loginStatus.textContent.startsWith("Not signed")) {
-    loginStatus.textContent = signedInText;
-  }
-
-  if (logoutBtn) {
-    logoutBtn.style.display = authSession ? "block" : "none";
-  }
   if (accountMenuEmail) accountMenuEmail.textContent = authSession?.email || "Not signed in";
 }
 
-function showLoginScreen() {
-  if (loginScreen) loginScreen.style.display = "flex";
+function showAccessScreen() {
+  if (accessScreen) accessScreen.style.display = "flex";
   if (startScreen) startScreen.style.display = "none";
   if (setupScreen) setupScreen.style.display = "none";
   if (sessionScreen) sessionScreen.style.display = "none";
@@ -1431,7 +1389,7 @@ function showLoginScreen() {
 }
 
 function showStartScreen() {
-  if (loginScreen) loginScreen.style.display = "none";
+  if (accessScreen) accessScreen.style.display = "none";
   if (setupScreen) setupScreen.style.display = "none";
   if (sessionScreen) sessionScreen.style.display = "none";
   if (startScreen) startScreen.style.display = "flex";
@@ -1439,40 +1397,10 @@ function showStartScreen() {
 }
 
 function showSetupScreen() {
-  if (loginScreen) loginScreen.style.display = "none";
+  if (accessScreen) accessScreen.style.display = "none";
   if (startScreen) startScreen.style.display = "none";
   if (sessionScreen) sessionScreen.style.display = "none";
   if (setupScreen) setupScreen.style.display = "block";
-}
-
-async function handleLogin() {
-  const email = (loginEmail?.value || "").trim();
-  const password = loginPassword?.value || "";
-
-  if (!isValidEmail(email)) {
-    setError("Please enter a valid email address.");
-    return;
-  }
-  if (!password) {
-    setError("Please enter your password.");
-    return;
-  }
-
-  try {
-    const result = await api("POST", "/api/auth/login", { email, password });
-    if (!result?.token || !result?.session) {
-      setError("Authentication failed.");
-      return;
-    }
-
-    await setAuthToken(result.token);
-    await setAuthSession(result.session);
-    setError("");
-    setStatus(`Signed in as ${result.session.email}.`);
-    showStartScreen();
-  } catch (err) {
-    setError(err instanceof Error ? err.message.replace(/^POST .*?: /, "") : "Authentication failed.");
-  }
 }
 
 async function completeDesktopHandoff(code) {
@@ -1481,11 +1409,10 @@ async function completeDesktopHandoff(code) {
     if (!result?.token || !result?.session) throw new Error("Desktop sign-in could not be completed.");
     await setAuthToken(result.token);
     await setAuthSession(result.session);
-    setError("");
-    showStartScreen();
+    showSetupScreen();
   } catch (error) {
-    showLoginScreen();
-    setError(error instanceof Error ? error.message : "Desktop sign-in could not be completed.");
+    showAccessScreen();
+    alert(error instanceof Error ? error.message : "Desktop sign-in could not be completed.");
   }
 }
 

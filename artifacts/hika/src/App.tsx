@@ -15,6 +15,7 @@ import History from "@/pages/History";
 import SessionDetail from "@/pages/SessionDetail";
 import Documents from "@/pages/Documents";
 import Settings from "@/pages/Settings";
+import DesktopConnect from "@/pages/DesktopConnect";
 import StealthOverlay from "@/pages/StealthOverlay";
 import NotFound from "@/pages/not-found";
 
@@ -68,6 +69,7 @@ function Router() {
     <Switch>
       {/* Public landing page — no shell */}
       <Route path="/login" component={Login} />
+      <Route path="/desktop-connect" component={DesktopConnect} />
       <Route path="/install" component={ProtectedInstall} />
       <Route path="/" component={HomeRoute} />
 
