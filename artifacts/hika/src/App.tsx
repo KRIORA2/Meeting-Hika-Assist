@@ -31,9 +31,6 @@ function AppRedirect({ to }: { to: string }) {
 }
 
 function HomeRoute() {
-  if (!isAuthenticated()) {
-    return <AppRedirect to="/login?next=%2F" />;
-  }
   return <Landing />;
 }
 

@@ -164,26 +164,42 @@ export default function Landing() {
           <a href="#docs" className="hover:text-white transition-colors">Docs</a>
         </div>
         <div className="flex items-center gap-3">
-          <button
-            className="text-sm px-4 py-2 rounded-xl border border-white/15 bg-white/[0.05] text-white/75"
-            title={sessionEmail || "Signed in user"}
-          >
-            {sessionEmail ? `Signed in: ${sessionEmail}` : "Signed in"}
-          </button>
-          <button
-            onClick={() => {
-              void signOut();
-              navigate("/login");
-            }}
-            className="text-sm font-semibold px-4 py-2 rounded-xl border border-white/15 bg-white/[0.05] hover:bg-white/[0.09] transition-all"
-          >
-            Logout
-          </button>
-          <button onClick={() => navigate("/session")}
-            className="flex items-center gap-2.5 text-sm font-semibold px-4 py-2 rounded-xl transition-all hover:opacity-90 active:scale-[0.97]"
-            style={{ background: "linear-gradient(135deg, #6366f1, #8b5cf6)", boxShadow: "0 4px 16px rgba(99,102,241,0.35)" }}>
-            Launch App <ArrowRight size={14} />
-          </button>
+          {sessionEmail ? (
+            <>
+              <button
+                className="hidden sm:block text-sm px-4 py-2 rounded-xl border border-white/15 bg-white/[0.05] text-white/75"
+                title={sessionEmail}
+              >
+                {sessionEmail}
+              </button>
+              <button
+                onClick={() => {
+                  void signOut();
+                  setSessionEmail("");
+                }}
+                className="text-sm font-semibold px-4 py-2 rounded-xl border border-white/15 bg-white/[0.05] hover:bg-white/[0.09] transition-all"
+              >
+                Logout
+              </button>
+              <button onClick={() => navigate("/session")}
+                className="flex items-center gap-2.5 text-sm font-semibold px-4 py-2 rounded-xl transition-all hover:opacity-90 active:scale-[0.97]"
+                style={{ background: "linear-gradient(135deg, #6366f1, #8b5cf6)", boxShadow: "0 4px 16px rgba(99,102,241,0.35)" }}>
+                Launch App <ArrowRight size={14} />
+              </button>
+            </>
+          ) : (
+            <>
+              <button onClick={() => navigate("/login")}
+                className="text-sm font-semibold px-3 py-2 text-white/70 hover:text-white transition-colors">
+                Sign in
+              </button>
+              <button onClick={() => navigate("/login?mode=signup")}
+                className="text-sm font-semibold px-4 py-2 rounded-xl transition-all hover:opacity-90 active:scale-[0.97]"
+                style={{ background: "linear-gradient(135deg, #6366f1, #8b5cf6)", boxShadow: "0 4px 16px rgba(99,102,241,0.35)" }}>
+                Create account
+              </button>
+            </>
+          )}
         </div>
       </nav>
 

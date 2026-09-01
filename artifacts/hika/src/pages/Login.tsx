@@ -32,6 +32,12 @@ export default function Login() {
     }
   }, [navigate]);
 
+  useEffect(() => {
+    if (new URLSearchParams(window.location.search).get("mode") === "signup") {
+      setMode("signup");
+    }
+  }, []);
+
   function getNextUrl() {
     const params = new URLSearchParams(window.location.search);
     return params.get("next") || "/";
