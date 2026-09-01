@@ -985,10 +985,13 @@ async function analyze(utterance) {
     screenshotBase64 = await window.hikaElectron.captureScreen().catch(() => null);
   }
 
+  const codeRequest = /\b(code|pyspark|spark|python|sql|query|script|databricks)\b/i.test(utterance);
   const context = [
     `ANSWER THIS: "${utterance}"`,
     sessionGuidance ? `Session guidance: ${sessionGuidance}` : "",
-    "Give a detailed, natural answer the candidate can say aloud. Speak in confident first person only when supported by the uploaded resume or context. Include concrete responsibilities, technical decisions, impact, and one relevant example. Never invent experience.",
+    codeRequest
+      ? "Return complete executable code first. Do not use interview-answer headings, resume matches, tips, or prose templates. Include only a brief explanation after the code when necessary."
+      : "Give a detailed, natural answer the candidate can say aloud. Speak in confident first person only when supported by the uploaded resume or context. Include concrete responsibilities, technical decisions, impact, and one relevant example. Never invent experience.",
     `Timestamp: ${new Date().toISOString()}`,
   ].filter(Boolean).join("\n");
 

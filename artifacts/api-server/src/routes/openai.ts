@@ -836,14 +836,8 @@ Return ONLY valid JSON with this structure:
 {
   "question": "Concise label ≤60 chars",
   "questionType": "${questionType}",
-  "recommendedAnswer": "Main answer spoken by candidate",
-  "keywords": ["keyword1", "keyword2", "keyword3"],
-  "resumeMatch": ["Company: ...", "Project: ...", "Experience: ...", "Skill: ..."],
-  "followUpAnswer": "If interviewer asks for more",
-  "interviewTip": "One practical suggestion",
-  "confidenceScore": 0,
-  "answer": "Final formatted answer string exactly in required sections",
-  "suggestions": ["One natural follow-up the user could say out loud"],
+  "recommendedAnswer": "Complete high-quality answer the candidate can say aloud",
+  "answer": "Same answer, with no headings or templates",
   "confidence": "high|medium|low",
   "sections": [
     {
@@ -859,13 +853,7 @@ Important:
 - Never use "Meeting context" as the question label.
 - Never write placeholder code like "# your logic here" or "...".
 - For SQL/Python/PySpark/code requests, the top-level answer should be code-first and not prose.
-- For interview or meeting answers, the top-level answer must follow this exact structure:
-  1) 🎯 Recommended Answer
-  2) 📌 Mention These Keywords
-  3) 💼 Resume Match
-  4) ⭐ If Interviewer Asks More
-  5) 🧠 Interview Tip
-  6) Confidence bar with 10 blocks and percentage.
+- For interview or meeting answers, return only the polished answer the candidate should say. Do not include keywords, resume matches, follow-up suggestions, interview tips, confidence scores, headings, or labels.
 - Do not apologize or add meta-commentary.`,
         },
         { role: "user", content: userContent },
@@ -897,30 +885,36 @@ Important:
     }
 
     const transcriptText = typeof transcript === "string" ? transcript : "";
+    const codeIntent = isCodeIntent(explicitQuestion ?? transcriptText);
     const sections = (result.sections ?? []).map((s) => ({
       ...s,
       language: normalizeLanguage(s.language),
     }));
 
-    const numericConfidence = typeof result.confidenceScore === "number"
-      ? Math.max(0, Math.min(100, Math.round(result.confidenceScore)))
-      : confidenceScoreFromLabel(result.confidence);
-
     const recommendedAnswer = typeof result.recommendedAnswer === "string" ? result.recommendedAnswer.trim() : "";
-    const followUpAnswer = typeof result.followUpAnswer === "string" ? result.followUpAnswer.trim() : "";
-    const interviewTip = typeof result.interviewTip === "string" ? result.interviewTip.trim() : "";
 
     let answer = (result.answer ?? "").trim();
 
-    if (!answer || !answer.includes("🎯 Recommended Answer") || !answer.includes("💼 Resume Match")) {
-      answer = formatInterviewAnswer({
-        recommendedAnswer: recommendedAnswer || "I couldn't find enough information to answer accurately.",
-        keywords: Array.isArray(result.keywords) ? result.keywords : [],
-        resumeMatch: Array.isArray(result.resumeMatch) ? result.resumeMatch : [],
-        followUp: followUpAnswer || "I can walk deeper into one concrete implementation detail and quantify impact.",
-        tip: interviewTip || "Anchor every answer with one measurable business impact to improve interviewer confidence.",
-        confidenceScore: numericConfidence,
-      });
+    if (codeIntent) {
+      const codeSection = sections.find((section) => section.content && /^(code|sql)$/i.test(section.type));
+      const preferredLanguage = detectRequestedLanguage(explicitQuestion ?? transcriptText);
+      const firstCodeBlock = extractFirstCodeBlock(answer);
+
+      if (codeSection?.content) {
+        answer = codeSection.content;
+      } else if (firstCodeBlock?.code) {
+        answer = firstCodeBlock.code;
+      } else {
+        const repaired = await runCodeRepairPass({
+          promptQuestion: explicitQuestion ?? transcriptText,
+          originalAnswer: answer || recommendedAnswer,
+          preferredLanguage,
+        });
+        answer = repaired.answer || repaired.sections[0]?.content || "Unable to generate executable code for this request.";
+        if (repaired.sections.length) sections.splice(0, sections.length, ...repaired.sections);
+      }
+    } else {
+      answer = recommendedAnswer || answer;
     }
 
     if (!answer) {
