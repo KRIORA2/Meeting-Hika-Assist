@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { motion } from "framer-motion";
 import { Mic, Monitor, Volume2, Sliders, Shield, Keyboard, Bell } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { getStoredSessionToken } from "@/lib/auth";
 
 function Section({ title, icon: Icon, children }: { title: string; icon: React.ElementType; children: React.ReactNode }) {
   return (
@@ -72,12 +73,36 @@ export default function Settings() {
   });
   const [overlayOpacity, setOverlayOpacity] = useState(85);
   const [chunkSize, setChunkSize] = useState(8);
+  const [desktopStatus, setDesktopStatus] = useState("");
 
   useEffect(() => {
     if (typeof window !== "undefined") {
       window.localStorage.setItem("hika-ai-model", model);
     }
   }, [model]);
+
+  async function openDesktopApp() {
+    const token = getStoredSessionToken();
+    if (!token) {
+      setDesktopStatus("Please sign in again before opening the desktop app.");
+      return;
+    }
+
+    setDesktopStatus("Opening Hikanest desktop...");
+    try {
+      const apiUrl = import.meta.env.VITE_API_URL || "http://localhost:5000";
+      const response = await fetch(`${apiUrl}/api/auth/desktop/handoff`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const result = await response.json() as { handoffUrl?: string; error?: string };
+      if (!response.ok || !result.handoffUrl) throw new Error(result.error || "Desktop sign-in is unavailable.");
+      window.location.assign(result.handoffUrl);
+      setDesktopStatus("Desktop sign-in link opened.");
+    } catch (error) {
+      setDesktopStatus(error instanceof Error ? error.message : "Desktop sign-in is unavailable.");
+    }
+  }
 
   return (
     <div className="h-full overflow-y-auto">
@@ -160,6 +185,12 @@ export default function Settings() {
           </Section>
 
           <Section title="Overlay & Display" icon={Monitor}>
+            <Row label="Desktop app" description="Open the installed app without signing in again">
+              <button onClick={openDesktopApp} className="rounded-lg bg-primary px-3 py-1.5 text-sm font-semibold text-primary-foreground">
+                Open desktop app
+              </button>
+            </Row>
+            {desktopStatus && <p className="px-5 pb-3 text-xs text-muted-foreground">{desktopStatus}</p>}
             <Row label="Private Stealth Mode" description="Use Document Picture-in-Picture so the overlay is invisible to screen share">
               <Toggle value={stealthMode} onChange={setStealthMode} />
             </Row>

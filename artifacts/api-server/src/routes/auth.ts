@@ -2,7 +2,7 @@ import { Router } from "express";
 import { z } from "zod";
 import { OAuth2Client } from "google-auth-library";
 import { and, eq, gt, isNull } from "drizzle-orm";
-import { db, users, authSessions, passwordResetTokens } from "@workspace/db";
+import { db, users, authSessions, passwordResetTokens, desktopLoginCodes } from "@workspace/db";
 import {
   createOpaqueToken,
   createSessionForUser,
@@ -66,6 +66,10 @@ const passwordResetRequestSchema = z.object({
 const passwordResetConfirmSchema = z.object({
   token: z.string().min(1),
   password: z.string().min(6),
+});
+
+const desktopExchangeSchema = z.object({
+  code: z.string().min(20).max(200),
 });
 
 function toAuthUser(row: { id: number; email: string; provider: string | null | undefined }): AuthUser {
@@ -214,6 +218,55 @@ router.post("/auth/logout", requireAuth, async (req, res) => {
     await db.delete(authSessions).where(eq(authSessions.id, req.authSessionId));
   }
   res.status(204).end();
+});
+
+router.post("/auth/desktop/handoff", requireAuth, async (req, res) => {
+  try {
+    const code = createOpaqueToken();
+    await db.insert(desktopLoginCodes).values({
+      userId: req.authUser!.id,
+      codeHash: hashOpaqueToken(code),
+      expiresAt: new Date(Date.now() + 1000 * 60 * 2),
+    });
+    res.json({ handoffUrl: `hikanest://auth?code=${encodeURIComponent(code)}` });
+  } catch (error) {
+    logger.error({ err: error, userId: req.authUser!.id }, "Desktop handoff creation failed");
+    res.status(503).json({ error: "Desktop sign-in is temporarily unavailable." });
+  }
+});
+
+router.post("/auth/desktop/exchange", async (req, res) => {
+  const parsed = desktopExchangeSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: "Invalid desktop sign-in request." });
+    return;
+  }
+
+  try {
+    const [codeRow] = await db
+      .select()
+      .from(desktopLoginCodes)
+      .where(and(
+        eq(desktopLoginCodes.codeHash, hashOpaqueToken(parsed.data.code)),
+        gt(desktopLoginCodes.expiresAt, new Date()),
+        isNull(desktopLoginCodes.usedAt),
+      ));
+    if (!codeRow) {
+      res.status(401).json({ error: "This desktop sign-in link has expired or was already used." });
+      return;
+    }
+
+    const [user] = await db.select().from(users).where(eq(users.id, codeRow.userId));
+    if (!user) {
+      res.status(401).json({ error: "Account was not found." });
+      return;
+    }
+    await db.update(desktopLoginCodes).set({ usedAt: new Date() }).where(eq(desktopLoginCodes.id, codeRow.id));
+    res.json(await createSessionForUser(toAuthUser(user), user.provider || "password"));
+  } catch (error) {
+    logger.error({ err: error }, "Desktop handoff exchange failed");
+    res.status(503).json({ error: "Desktop sign-in is temporarily unavailable." });
+  }
 });
 
 router.post("/auth/password-reset/request", async (req, res) => {

@@ -149,6 +149,7 @@ async function init() {
       meetingBadge.textContent = `● ${name}`;
       meetingBadge.style.display = "inline-block";
     });
+    window.hikaElectron.onDesktopAuthCode((code) => { void completeDesktopHandoff(code); });
   }
 
   // Detect best audio mime type
@@ -1471,6 +1472,20 @@ async function handleLogin() {
     showStartScreen();
   } catch (err) {
     setError(err instanceof Error ? err.message.replace(/^POST .*?: /, "") : "Authentication failed.");
+  }
+}
+
+async function completeDesktopHandoff(code) {
+  try {
+    const result = await api("POST", "/api/auth/desktop/exchange", { code });
+    if (!result?.token || !result?.session) throw new Error("Desktop sign-in could not be completed.");
+    await setAuthToken(result.token);
+    await setAuthSession(result.session);
+    setError("");
+    showStartScreen();
+  } catch (error) {
+    showLoginScreen();
+    setError(error instanceof Error ? error.message : "Desktop sign-in could not be completed.");
   }
 }
 

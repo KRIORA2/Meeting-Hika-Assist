@@ -11,6 +11,35 @@ let overlayWindow: BrowserWindow | null = null;
 let tray: Tray | null = null;
 let buildTrayMenu: (() => Menu) | null = null;
 let clickThroughEnabled = false;
+let pendingDesktopAuthCode: string | null = null;
+
+function receiveDesktopAuthUrl(value: string) {
+  try {
+    const url = new URL(value);
+    if (url.protocol !== "hikanest:" || url.hostname !== "auth") return;
+    const code = url.searchParams.get("code");
+    if (!code) return;
+    pendingDesktopAuthCode = code;
+    overlayWindow?.show();
+    overlayWindow?.webContents.send("desktop-auth-code", code);
+  } catch {
+    // Ignore malformed custom protocol invocations.
+  }
+}
+
+const hasSingleInstanceLock = app.requestSingleInstanceLock();
+if (!hasSingleInstanceLock) {
+  app.quit();
+} else {
+  app.on("second-instance", (_event, commandLine) => {
+    const authUrl = commandLine.find((value) => value.startsWith("hikanest://"));
+    if (authUrl) receiveDesktopAuthUrl(authUrl);
+  });
+  app.on("open-url", (event, url) => {
+    event.preventDefault();
+    receiveDesktopAuthUrl(url);
+  });
+}
 
 const secureStorePath = () => path.join(app.getPath("userData"), "secure-store.json");
 
@@ -113,6 +142,7 @@ function createOverlay() {
   overlayWindow.webContents.once("did-finish-load", () => {
     startMeetingDetection();
     overlayWindow?.webContents.send("clickthrough-changed", clickThroughEnabled);
+    if (pendingDesktopAuthCode) overlayWindow?.webContents.send("desktop-auth-code", pendingDesktopAuthCode);
   });
 }
 
@@ -300,6 +330,9 @@ ipcMain.on("overlay-close", () => app.quit());
 
 // ── App lifecycle ─────────────────────────────────────────────────────────────
 app.whenReady().then(() => {
+  app.setAsDefaultProtocolClient("hikanest");
+  const authUrl = process.argv.find((value) => value.startsWith("hikanest://"));
+  if (authUrl) receiveDesktopAuthUrl(authUrl);
   createOverlay();
   createTray();
 

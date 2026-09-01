@@ -47,6 +47,10 @@ contextBridge.exposeInMainWorld("hikaElectron", {
   onClickThroughChanged: (cb: (enabled: boolean) => void): void => {
     ipcRenderer.on("clickthrough-changed", (_event, enabled: boolean) => cb(enabled));
   },
+
+  onDesktopAuthCode: (cb: (code: string) => void): void => {
+    ipcRenderer.on("desktop-auth-code", (_event, code: string) => cb(code));
+  },
 });
 
 declare global {
@@ -68,6 +72,7 @@ declare global {
       pin: () => void;
       onMeetingDetected: (cb: (appName: string) => void) => void;
       onClickThroughChanged: (cb: (enabled: boolean) => void) => void;
+      onDesktopAuthCode: (cb: (code: string) => void) => void;
     };
   }
 }

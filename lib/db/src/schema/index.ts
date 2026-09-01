@@ -22,5 +22,6 @@ export * from "./messages";
 export * from "./users";
 export * from "./auth-sessions";
 export * from "./password-reset-tokens";
+export * from "./desktop-login-codes";
 export * from "./sessions";
 export * from "./insights";
