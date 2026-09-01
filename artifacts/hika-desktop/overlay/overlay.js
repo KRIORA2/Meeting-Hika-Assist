@@ -47,6 +47,7 @@ let realtimeReconnectTimer = null;
 let realtimeReconnectAttempts = 0;
 let realtimePartialTranscript = "";
 let forceHttpFallback = false;
+const useRealtimeVoice = true;
 const realtimeMetrics = {};
 let realtimeDiagnostics = false;
 let selectedSessionMode = "interview";
@@ -556,7 +557,7 @@ async function startRecording() {
     // A persistent WebRTC connection avoids serializing and re-uploading an
     // ever-growing WebM blob every few seconds. If Realtime is unavailable,
     // retain the existing recorder/transcription workflow as a safe fallback.
-    if (!forceHttpFallback && await startRealtimeVoice(stream)) {
+    if (useRealtimeVoice && !forceHttpFallback && await startRealtimeVoice(stream)) {
       isRecording = true;
       micBtn.classList.add("recording");
       micBtn.textContent = "⏹";
@@ -896,8 +897,7 @@ async function buildRecordingStream() {
   const micTrack = mic.getAudioTracks()[0];
   if (!micTrack) throw new Error("No microphone track");
 
-  const sys = await getSystemAudioStream();
-  const sysTrack = sys?.getAudioTracks?.()[0] || null;
+  const sysTrack = null;
 
   const Ctx = window.AudioContext || window.webkitAudioContext;
   audioContext = new Ctx({ sampleRate: 48000 });
@@ -988,7 +988,7 @@ async function analyze(utterance) {
   const context = [
     `ANSWER THIS: "${utterance}"`,
     sessionGuidance ? `Session guidance: ${sessionGuidance}` : "",
-    "Respond in 2-3 direct sentences and keep it concise.",
+    "Give a detailed, natural answer the candidate can say aloud. Speak in confident first person only when supported by the uploaded resume or context. Include concrete responsibilities, technical decisions, impact, and one relevant example. Never invent experience.",
     `Timestamp: ${new Date().toISOString()}`,
   ].filter(Boolean).join("\n");
 
@@ -1001,14 +1001,6 @@ async function analyze(utterance) {
       model: selectedModel,
     });
     if (!result) return;
-
-    const previousTop = insights[0];
-    const nextAnswer = normalizeComparableText(result.answer || "");
-    const prevAnswer = normalizeComparableText(previousTop?.answer || "");
-    const nextQuestion = normalizeComparableText(utterance || "");
-    const prevQuestion = normalizeComparableText(previousTop?.question || "");
-
-    // Skip the retry path in the desktop flow to keep latency low.
 
     const insight = {
       question:    result.question || utterance,
@@ -1028,7 +1020,7 @@ async function analyze(utterance) {
       });
     } catch {}
 
-    insights.unshift(insight);
+    insights = [insight];
     selectedHistoryInsight = null;
     renderInsights();
   } catch (err) {

@@ -97,7 +97,7 @@ router.post("/openai/realtime/session", async (req, res) => {
     "Output polished natural free text only: no JSON, no confidence score, no role labels, and no headings such as 'Recommended Answer'. Do not repeat the question.",
     "Use a short paragraph by default; use brief bullets only when they make an explanation, comparison, or steps clearer.",
     "Be accurate, practical, and specific. Never invent facts, project details, metrics, or candidate experience. If essential information is missing, state the assumption briefly and give the best useful answer.",
-    "Keep ordinary answers under 110 words. Include code only when it is requested, and keep code immediately usable.",
+    "Keep ordinary answers under 140 words while remaining direct. For interview questions, give a detailed candidate answer with responsibilities, technical decisions, impact, and one relevant example when supported by supplied context. Include code only when it is requested, and keep code immediately usable.",
     ...modeInstructions,
     sessionGuidance ? `Session guidance:\n${sessionGuidance}` : "",
     documentContext.length ? `Relevant candidate context (use only when supported):\n${documentContext.join("\n")}` : "",
