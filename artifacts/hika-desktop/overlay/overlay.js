@@ -638,7 +638,6 @@ async function startRecording() {
 }
 
 async function stopRecording() {
-  stopRealtimeVoice();
   clearInterval(chunkTimer);
   isRecording = false;
   liveTxEl.style.display     = "none";
@@ -648,6 +647,18 @@ async function stopRecording() {
   recIndicator.style.display = "none";
   statusDot.textContent      = "● Live";
   statusDot.className        = "status-dot";
+
+  if (realtimePeer?.connectionState === "connected" && realtimeEvents?.readyState === "open") {
+    statusDot.textContent = "● Preparing answer";
+    mediaRecorder?.stream.getTracks().forEach(t => t.stop());
+    stopAudioPipeline();
+    setTimeout(() => {
+      if (realtimeEvents?.readyState === "open") {
+        realtimeEvents.send(JSON.stringify({ type: "response.create" }));
+      }
+    }, 1000);
+    return;
+  }
 
   if (mediaRecorder && mediaRecorder.state !== "inactive") {
     mediaRecorder.stop();
@@ -720,13 +731,13 @@ async function startRealtimeVoice(stream, reconnect = false) {
       realtimePartialTranscript += payload.delta || "";
       liveTxText.textContent = realtimePartialTranscript;
     } else if (payload.type === "conversation.item.input_audio_transcription.completed") {
-      const text = (payload.transcript || "").trim();
+      const text = (payload.transcript || realtimePartialTranscript || "").trim();
       if (text) {
         latestUtterance = text;
         addTranscriptChunk(text);
         liveTxText.textContent = text;
       }
-      realtimePartialTranscript = "";
+      realtimePartialTranscript = text;
       markRealtimeMetric("transcript_completed");
     } else if (payload.type === "response.created") {
       markRealtimeMetric("response_created");
@@ -753,6 +764,7 @@ async function startRealtimeVoice(stream, reconnect = false) {
       realtimeResponseId = null;
       markRealtimeMetric("response_completed");
       statusDot.textContent = isRecording ? "● REC" : "● Live";
+      if (!isRecording) stopRealtimeVoice();
     }
   });
 

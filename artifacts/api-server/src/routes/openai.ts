@@ -31,8 +31,8 @@ const REALTIME_CONFIG = {
   maxOutputTokens: envInteger("OPENAI_REALTIME_MAX_OUTPUT_TOKENS", 220, 32, 4096),
   vadThreshold: envNumber("OPENAI_REALTIME_VAD_THRESHOLD", 0.45, 0, 1),
   vadPrefixPaddingMs: envInteger("OPENAI_REALTIME_VAD_PREFIX_PADDING_MS", 200, 0, 2000),
-  interviewVadSilenceMs: envInteger("INTERVIEW_VAD_SILENCE_MS", 250, 150, 2000),
-  meetingVadSilenceMs: envInteger("MEETING_VAD_SILENCE_MS", 400, 150, 2000),
+  interviewVadSilenceMs: envInteger("INTERVIEW_VAD_SILENCE_MS", 900, 300, 2000),
+  meetingVadSilenceMs: envInteger("MEETING_VAD_SILENCE_MS", 1000, 300, 2000),
 };
 
 type EmbeddingCacheEntry = {
@@ -121,7 +121,7 @@ router.post("/openai/realtime/session", async (req, res) => {
           threshold: REALTIME_CONFIG.vadThreshold,
           prefix_padding_ms: REALTIME_CONFIG.vadPrefixPaddingMs,
           silence_duration_ms: silenceDurationMs,
-          create_response: true,
+          create_response: false,
           interrupt_response: true,
         },
       },
