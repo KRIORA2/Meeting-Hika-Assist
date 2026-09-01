@@ -8,4 +8,11 @@ router.get("/healthz", (_req, res) => {
   res.json(data);
 });
 
+router.get("/desktop/update", (_req, res) => {
+  res.json({
+    version: process.env.DESKTOP_LATEST_VERSION ?? "1.0.0",
+    downloadUrl: process.env.DESKTOP_DOWNLOAD_URL ?? null,
+  });
+});
+
 export default router;

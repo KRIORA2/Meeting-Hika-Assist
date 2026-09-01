@@ -15,6 +15,7 @@ type BeforeInstallPromptEvent = Event & {
 export default function Landing() {
   const [, navigate] = useLocation();
   const [sessionEmail, setSessionEmail] = useState<string>("");
+  const isSignedIn = Boolean(sessionEmail);
   const [installPrompt, setInstallPrompt] = useState<BeforeInstallPromptEvent | null>(null);
   const [installed, setInstalled] = useState(false);
   const [installBanner, setInstallBanner] = useState(false);
@@ -131,7 +132,7 @@ export default function Landing() {
     <div className="min-h-screen bg-[#07070f] text-white font-['Inter',sans-serif] overflow-x-hidden">
 
       {/* ── Install banner ── */}
-      {installBanner && !installed && (
+      {isSignedIn && installBanner && !installed && (
         <div className="fixed top-0 left-0 right-0 z-50 flex items-center justify-between gap-4 px-5 py-3"
           style={{ background: "linear-gradient(90deg, #6366f1, #8b5cf6)", boxShadow: "0 2px 20px rgba(99,102,241,0.4)" }}>
           <div className="flex items-center gap-3">
@@ -152,13 +153,13 @@ export default function Landing() {
 
       {/* ── Nav ── */}
       <nav className="flex items-center justify-between px-6 md:px-12 py-5 border-b border-white/[0.06]"
-        style={{ paddingTop: installBanner && !installed ? "4.5rem" : undefined }}>
+        style={{ paddingTop: isSignedIn && installBanner && !installed ? "4.5rem" : undefined }}>
         <div className="flex items-center gap-2.5">
           <img src="/icons/icon.png" alt="Hikanest" className="w-8 h-8 rounded-xl object-cover shadow-[0_0_16px_rgba(99,102,241,0.5)]" />
           <span className="text-base font-bold tracking-tight">Hikanest</span>
         </div>
         <div className="hidden md:flex items-center gap-8 text-sm text-white/50">
-          <button onClick={() => navigate("/install")} className="hover:text-white transition-colors">Desktop App</button>
+          {isSignedIn && <button onClick={() => navigate("/install")} className="hover:text-white transition-colors">Desktop App</button>}
           <a href="#features" className="hover:text-white transition-colors">Features</a>
           <a href="#how-it-works" className="hover:text-white transition-colors">How it works</a>
           <a href="#docs" className="hover:text-white transition-colors">Docs</a>
@@ -243,26 +244,26 @@ export default function Landing() {
 
           {/* CTAs */}
           <div className="flex flex-col sm:flex-row items-center justify-center gap-4">
-            <button onClick={() => navigate("/session")}
+            <button onClick={() => navigate(isSignedIn ? "/session" : "/login?next=%2Fsession")}
               className="flex items-center gap-2.5 text-base font-bold px-8 py-4 rounded-2xl transition-all hover:opacity-90 hover:scale-[1.02] active:scale-[0.98] shadow-2xl"
               style={{ background: "linear-gradient(135deg, #6366f1, #8b5cf6)", boxShadow: "0 8px 32px rgba(99,102,241,0.45)" }}>
-              <Play size={16} fill="white" />Open App Free
+              <Play size={16} fill="white" />{isSignedIn ? "Open App" : "Sign in to start"}
             </button>
-            {installPrompt && !installed ? (
+            {isSignedIn && installPrompt && !installed ? (
               <button onClick={handleInstall}
                 className="flex items-center gap-2.5 text-base font-semibold px-8 py-4 rounded-2xl border border-white/15 bg-white/[0.05] hover:bg-white/[0.09] transition-all">
                 <Download size={16} />Install on Desktop
               </button>
-            ) : installed ? (
+            ) : isSignedIn && installed ? (
               <span className="flex items-center gap-2 text-sm text-emerald-400 border border-emerald-500/25 bg-emerald-500/8 px-6 py-3 rounded-2xl">
                 <CheckCircle size={15} />App Installed!
               </span>
-            ) : (
+            ) : isSignedIn ? (
               <button onClick={() => navigate("/install")}
                 className="flex items-center gap-2.5 text-base font-semibold px-8 py-4 rounded-2xl border border-white/15 bg-white/[0.05] hover:bg-white/[0.09] transition-all">
                 <Download size={16} />Install Desktop App
               </button>
-            )}
+            ) : null}
           </div>
         </div>
       </section>
@@ -424,7 +425,7 @@ export default function Landing() {
       </section>
 
       {/* ── Install section ── */}
-      <section id="install" className="px-6 md:px-16 py-20 border-t border-white/[0.06]">
+      {isSignedIn && <section id="install" className="px-6 md:px-16 py-20 border-t border-white/[0.06]">
         <div className="max-w-3xl mx-auto">
           <div className="rounded-3xl border border-indigo-500/20 p-10 text-center relative overflow-hidden"
             style={{ background: "linear-gradient(135deg, rgba(99,102,241,0.12) 0%, rgba(139,92,246,0.08) 100%)" }}>
@@ -477,7 +478,7 @@ export default function Landing() {
             </div>
           </div>
         </div>
-      </section>
+      </section>}
 
       {/* ── Footer ── */}
       <footer className="border-t border-white/[0.06] px-6 md:px-16 py-10">
@@ -491,12 +492,12 @@ export default function Landing() {
             <a href="#features" className="hover:text-white/60 transition-colors">Features</a>
             <a href="#how-it-works" className="hover:text-white/60 transition-colors">How it works</a>
             <a href="#docs" className="hover:text-white/60 transition-colors">Docs</a>
-            <a href="#install" className="hover:text-white/60 transition-colors">Install</a>
+            {isSignedIn && <a href="#install" className="hover:text-white/60 transition-colors">Install</a>}
           </div>
-          <button onClick={() => navigate("/session")}
+          <button onClick={() => navigate(isSignedIn ? "/session" : "/login?next=%2Fsession")}
             className="text-sm font-semibold px-5 py-2.5 rounded-xl transition-all hover:opacity-90"
             style={{ background: "linear-gradient(135deg, #6366f1, #8b5cf6)" }}>
-            Launch App →
+            {isSignedIn ? "Launch App →" : "Sign in →"}
           </button>
         </div>
       </footer>

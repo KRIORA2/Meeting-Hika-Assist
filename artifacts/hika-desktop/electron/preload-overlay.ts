@@ -7,6 +7,15 @@ contextBridge.exposeInMainWorld("hikaElectron", {
   getGoogleClientId: (): Promise<string> =>
     ipcRenderer.invoke("get-google-client-id"),
 
+  isDevelopment: (): Promise<boolean> =>
+    ipcRenderer.invoke("is-development"),
+
+  getAppVersion: (): Promise<string> =>
+    ipcRenderer.invoke("get-app-version"),
+
+  openExternal: (url: string): Promise<boolean> =>
+    ipcRenderer.invoke("open-external", url),
+
   setClickThrough: (enabled: boolean): Promise<void> =>
     ipcRenderer.invoke("set-clickthrough", enabled),
 
@@ -45,6 +54,9 @@ declare global {
     hikaElectron: {
       getApiUrl: () => Promise<string>;
       getGoogleClientId: () => Promise<string>;
+      isDevelopment: () => Promise<boolean>;
+      getAppVersion: () => Promise<string>;
+      openExternal: (url: string) => Promise<boolean>;
       setClickThrough: (enabled: boolean) => Promise<void>;
       setSize: (width: number, height: number) => Promise<void>;
       captureScreen: () => Promise<string | null>;

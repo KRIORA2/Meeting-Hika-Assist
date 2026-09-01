@@ -16,6 +16,30 @@
     <button class="wnd-btn danger" id="wnd-close-btn" title="Close app">✕</button>
   </div>
 
+  <div class="account-menu-wrap">
+    <button id="account-menu-btn" class="account-menu-btn" type="button" title="Account and settings">⋮</button>
+    <div id="account-menu" class="account-menu" hidden>
+      <p id="account-menu-email" class="account-menu-email">Account</p>
+      <button id="check-update-btn" type="button">Check for updates</button>
+      <button id="download-update-btn" type="button" hidden>Download update</button>
+      <button id="open-dashboard-btn" type="button">Open dashboard</button>
+      <label class="menu-toggle">Private overlay <input id="private-overlay" type="checkbox" checked /><span></span></label>
+      <button id="menu-logout-btn" class="menu-danger" type="button">Log out</button>
+      <p id="update-status" class="update-status"></p>
+    </div>
+  </div>
+
+  <button id="minimized-launcher" class="minimized-launcher" type="button" title="Open Hikanest" aria-label="Open Hikanest">
+    <img src="icon.png" alt="" />
+  </button>
+
+  <div id="splash-screen" aria-label="Loading Hikanest">
+    <div class="splash-mark"><img src="icon.png" alt="Hikanest" /></div>
+    <h1>Hikanest</h1>
+    <p>Meeting intelligence, ready when you are.</p>
+    <div class="splash-progress"><span></span></div>
+  </div>
+
   <!-- ── Login screen ── -->
   <div id="login-screen" style="display:none">
     <img class="logo-ring" src="icon.png" alt="Hikanest" />
@@ -35,17 +59,42 @@
   </div>
 
   <!-- ── Start screen ── -->
-  <div id="start-screen">
-    <img class="logo-ring" src="icon.png" alt="Hikanest" />
-    <h2>Hikanest Meeting Assistant</h2>
-    <p>AI Meeting Assistant — invisible to screen share</p>
-    <p class="login-hint">Shortcuts: Ctrl+Shift+C toggles click-through, Ctrl+Shift+H hides to tray.</p>
-    <p class="login-hint">If minimized, click Hikanest icon in the system tray to open again.</p>
-    <input id="meeting-name" class="name-input" type="text"
-      placeholder="Meeting name (e.g. Client Call)…" maxlength="80" />
-    <textarea id="session-guidance" class="name-input" rows="3"
-      placeholder="Session guidance (optional): e.g. Interview for Azure Data Admin role. Answer as a confident 6 years experienced candidate."></textarea>
-    <button id="start-btn" class="btn-start">Start Session</button>
+  <div id="start-screen" style="display:none">
+    <div class="setup-header">
+      <img class="setup-logo" src="icon.png" alt="Hikanest" />
+      <div><h2>Prepare your session</h2><p>Choose your context and response preferences.</p></div>
+      <button class="credit-button" type="button" title="Credits are managed on the web dashboard">No credits</button>
+    </div>
+    <div class="setup-body">
+      <label class="setup-label" for="meeting-name">Session name</label>
+      <input id="meeting-name" class="name-input" type="text" placeholder="e.g. Data Engineer interview" maxlength="80" />
+
+      <div class="mode-grid" role="group" aria-label="Session type">
+        <button class="mode-choice active" type="button" data-mode="interview">Interview</button>
+        <button class="mode-choice" type="button" data-mode="call">Regular call</button>
+      </div>
+
+      <label class="setup-label" for="job-post-url">Job post URL <span>optional</span></label>
+      <input id="job-post-url" class="name-input" type="url" placeholder="https://company.com/jobs/role" />
+
+      <div class="setup-section">
+        <div class="setup-section-head"><span>Context</span><span id="setup-uploaded-list">No documents added</span></div>
+        <div class="context-actions">
+          <label class="context-action"><input id="resume-upload" type="file" accept=".pdf,.doc,.docx,.txt,.md" />Add resume</label>
+          <label class="context-action"><input id="setup-doc-upload" type="file" multiple />Add documents</label>
+        </div>
+        <textarea id="session-guidance" class="name-input" rows="3" placeholder="Extra context, experience highlights, or answer style..."></textarea>
+      </div>
+
+      <div class="setup-section two-column">
+        <label><span class="setup-label">Output model</span><select id="model-select" class="setup-select"><option value="gpt-4.1">GPT-4.1</option><option value="gpt-4o">GPT-4o</option></select></label>
+        <label><span class="setup-label">Language</span><select id="output-language" class="setup-select"><option value="English">English</option><option value="Spanish">Spanish</option><option value="French">French</option></select></label>
+      </div>
+
+      <div class="behavior-row"><div><strong>Auto answer</strong><span>Analyze completed responses automatically</span></div><label class="switch"><input id="auto-answer" type="checkbox" checked /><span></span></label></div>
+      <div class="behavior-row"><div><strong>Save transcript</strong><span>Keep this session in your history</span></div><label class="switch"><input id="save-transcript" type="checkbox" checked /><span></span></label></div>
+      <button id="start-btn" class="btn-start">Start session</button>
+    </div>
   </div>
 
   <!-- ── Session screen ── -->

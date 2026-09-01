@@ -35,6 +35,46 @@ let micAnalyser     = null;
 let clientAnalyser  = null;
 let meterFrame      = null;
 let selectedHistoryInsight = null;
+let realtimePeer    = null;
+let realtimeEvents  = null;
+let realtimeAnswer  = "";
+let realtimeResponseId = null;
+const cancelledRealtimeResponseIds = new Set();
+let realtimeConnecting = false;
+let realtimeClosedByUser = false;
+let realtimeStream = null;
+let realtimeReconnectTimer = null;
+let realtimeReconnectAttempts = 0;
+let realtimePartialTranscript = "";
+let forceHttpFallback = false;
+const realtimeMetrics = {};
+let realtimeDiagnostics = false;
+let selectedSessionMode = "interview";
+let selectedModel = "gpt-4.1";
+let autoAnswerEnabled = true;
+let saveTranscriptEnabled = true;
+let screenBeforeMinimize = "start";
+let availableUpdateUrl = "";
+
+function markRealtimeMetric(name) {
+  const now = performance.now();
+  realtimeMetrics[name] = now;
+  if (name === "first_answer_delta" && realtimeMetrics.speech_stopped) {
+    realtimeMetrics.speech_end_to_first_answer_ms = Math.round(now - realtimeMetrics.speech_stopped);
+  }
+  // Electron DevTools is opt-in; this is intentionally diagnostic-only and
+  // never includes credentials or transcript content.
+  if (realtimeDiagnostics) {
+    console.debug("[hikanest:realtime]", name, realtimeMetrics.speech_end_to_first_answer_ms
+      ? { speech_end_to_first_answer_ms: realtimeMetrics.speech_end_to_first_answer_ms }
+      : "");
+  }
+}
+
+function appendRealtimeDelta(current, delta) {
+  if (!delta || current.endsWith(delta)) return current;
+  return delta.startsWith(current) ? delta : current + delta;
+}
 
 // ── DOM refs ──────────────────────────────────────────────────────────────────
 const $ = id => document.getElementById(id);
@@ -81,11 +121,27 @@ const loginPassword  = $("login-password");
 const logoutBtn      = $("logout-btn");
 const loginError     = $("login-error");
 const loginStatus    = $("login-status");
+const minimizedLauncher = $("minimized-launcher");
+const splashScreen    = $("splash-screen");
+const jobPostUrl      = $("job-post-url");
+const modelSelect     = $("model-select");
+const outputLanguage  = $("output-language");
+const autoAnswer      = $("auto-answer");
+const saveTranscript  = $("save-transcript");
+const setupUploadedList = $("setup-uploaded-list");
+const accountMenuBtn = $("account-menu-btn");
+const accountMenu = $("account-menu");
+const accountMenuEmail = $("account-menu-email");
+const checkUpdateBtn = $("check-update-btn");
+const downloadUpdateBtn = $("download-update-btn");
+const updateStatus = $("update-status");
+const privateOverlay = $("private-overlay");
 
 // ── Init ──────────────────────────────────────────────────────────────────────
 async function init() {
   if (window.hikaElectron) {
     apiUrl = await window.hikaElectron.getApiUrl();
+    realtimeDiagnostics = await window.hikaElectron.isDevelopment();
     window.hikaElectron.pin();
 
     // Listen for meeting auto-detection from main process
@@ -107,13 +163,34 @@ async function init() {
   // Event listeners
   startBtn.addEventListener("click", handleStart);
   meetingNameEl.addEventListener("keydown", e => { if (e.key === "Enter") handleStart(); });
+  document.querySelectorAll(".mode-choice").forEach((button) => {
+    button.addEventListener("click", () => {
+      selectedSessionMode = button.dataset.mode || "interview";
+      document.querySelectorAll(".mode-choice").forEach((item) => item.classList.toggle("active", item === button));
+    });
+  });
+  if (modelSelect) modelSelect.addEventListener("change", () => { selectedModel = modelSelect.value; });
+  if (autoAnswer) autoAnswer.addEventListener("change", () => { autoAnswerEnabled = autoAnswer.checked; });
+  if (saveTranscript) saveTranscript.addEventListener("change", () => { saveTranscriptEnabled = saveTranscript.checked; });
   micBtn.addEventListener("click", toggleRecording);
   endBtn.addEventListener("click", handleEnd);
   endHdrBtn.addEventListener("click", handleEnd);
-  hideBtn.addEventListener("click", () => window.hikaElectron?.hide());
+  hideBtn.addEventListener("click", minimizeToLauncher);
   if (wndMinBtn) {
-    wndMinBtn.addEventListener("click", () => window.hikaElectron?.hide());
+    wndMinBtn.addEventListener("click", minimizeToLauncher);
   }
+  minimizedLauncher?.addEventListener("click", restoreFromLauncher);
+  accountMenuBtn?.addEventListener("click", () => { accountMenu.hidden = !accountMenu.hidden; });
+  checkUpdateBtn?.addEventListener("click", checkForUpdates);
+  downloadUpdateBtn?.addEventListener("click", () => {
+    if (availableUpdateUrl) window.hikaElectron?.openExternal(availableUpdateUrl);
+  });
+  $("open-dashboard-btn")?.addEventListener("click", () => showToast("Dashboard URL is configured on the web app."));
+  $("menu-logout-btn")?.addEventListener("click", async () => { await clearAuthSession(); await clearAuthToken(); accountMenu.hidden = true; showLoginScreen(); });
+  privateOverlay?.addEventListener("change", () => {
+    if (!privateOverlay.checked) showToast("Screen-share protection remains enabled for safety.");
+    privateOverlay.checked = true;
+  });
   if (wndCloseBtn) {
     wndCloseBtn.addEventListener("click", () => window.hikaElectron?.close());
   }
@@ -125,30 +202,12 @@ async function init() {
   const uploadedList = $("uploaded-list");
   if (docUpload) {
     docUpload.addEventListener("change", async (e) => {
-      const files = docUpload.files;
-      if (!files || files.length === 0) return;
-      const toUpload = [];
-      for (let i = 0; i < files.length; i++) {
-        const f = files[i];
-        const b = await f.arrayBuffer();
-        const bytes = new Uint8Array(b);
-        let binary = "";
-        const chunkSize = 0x8000;
-        for (let j = 0; j < bytes.length; j += chunkSize) {
-          binary += String.fromCharCode.apply(null, Array.from(bytes.subarray(j, j + chunkSize)));
-        }
-        const base64 = btoa(binary);
-        toUpload.push({ name: f.name, contentBase64: base64 });
-      }
-      try {
-        const res = await api('POST', '/api/documents', { files: toUpload });
-        if (res && res.files) {
-          res.files.forEach((f) => { uploadedDocs.unshift({ id: f.id, name: f.name }); });
-          if (uploadedList) uploadedList.innerHTML = uploadedDocs.map(d=>d.name).join(', ');
-        }
-      } catch (err) { console.error('upload error', err); }
+      await uploadDocuments(docUpload.files, uploadedList);
     });
   }
+  [$("resume-upload"), $("setup-doc-upload")].filter(Boolean).forEach((input) => {
+    input.addEventListener("change", async () => uploadDocuments(input.files, setupUploadedList));
+  });
 
   if (loginAuthBtn) {
     loginAuthBtn.addEventListener("click", handleLogin);
@@ -156,6 +215,19 @@ async function init() {
   if (loginPassword) {
     loginPassword.addEventListener("keydown", (e) => { if (e.key === "Enter") handleLogin(); });
   }
+
+  // Electron minimizes/restores the renderer without recreating it. Recover a
+  // dead peer after focus, wake, or a network switch without opening duplicates.
+  const recoverRealtime = () => {
+    if (isRecording && realtimeStream && realtimePeer?.connectionState !== "connected" && !realtimeConnecting) {
+      void startRealtimeVoice(realtimeStream, true);
+    }
+  };
+  window.addEventListener("online", recoverRealtime);
+  window.addEventListener("focus", recoverRealtime);
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible") recoverRealtime();
+  });
   if (logoutBtn) {
     logoutBtn.addEventListener("click", () => {
       void clearAuthSession();
@@ -183,11 +255,11 @@ async function init() {
   clickthroughBtn.addEventListener("click", toggleClickThrough);
   updateClickThroughUI();
 
-  if (!authSession) {
-    showLoginScreen();
-  } else {
-    showStartScreen();
-  }
+  setTimeout(() => {
+    splashScreen?.classList.add("hidden");
+    if (!authSession) showLoginScreen();
+    else showStartScreen();
+  }, 5000);
 
   // Resize handle
   initResize();
@@ -207,6 +279,27 @@ async function init() {
       showToast(`Click-through ${clickThrough ? "On" : "Off"}`);
     }
   });
+}
+
+async function uploadDocuments(files, listElement) {
+  if (!files || files.length === 0) return;
+  const toUpload = [];
+  for (const file of files) {
+    const bytes = new Uint8Array(await file.arrayBuffer());
+    let binary = "";
+    for (let index = 0; index < bytes.length; index += 0x8000) {
+      binary += String.fromCharCode(...bytes.subarray(index, index + 0x8000));
+    }
+    toUpload.push({ name: file.name, contentBase64: btoa(binary) });
+  }
+  try {
+    const response = await api("POST", "/api/documents", { files: toUpload });
+    for (const file of response?.files || []) uploadedDocs.unshift({ id: file.id, name: file.name });
+    if (listElement) listElement.textContent = uploadedDocs.length ? `${uploadedDocs.length} document${uploadedDocs.length === 1 ? "" : "s"} added` : "No documents added";
+  } catch (error) {
+    console.error("upload error", error);
+    if (listElement) listElement.textContent = "Upload failed";
+  }
 }
 
 // ── Mic source selector ────────────────────────────────────────────────────────
@@ -240,6 +333,52 @@ async function loadMicSources() {
 function setFontSize(px) {
   currentFontSize = Math.min(16, Math.max(9, px));
   document.documentElement.style.setProperty("--fs", `${currentFontSize}px`);
+}
+
+function minimizeToLauncher() {
+  screenBeforeMinimize = sessionScreen.style.display !== "none" ? "session" : loginScreen.style.display !== "none" ? "login" : "start";
+  shell.classList.add("launcher-mode");
+  window.hikaElectron?.setSize(64, 64);
+}
+
+function restoreFromLauncher() {
+  shell.classList.remove("launcher-mode");
+  window.hikaElectron?.setSize(620, 680);
+  if (screenBeforeMinimize === "session") sessionScreen.style.display = "flex";
+  else if (screenBeforeMinimize === "login") showLoginScreen();
+  else showStartScreen();
+}
+
+function compareVersions(left, right) {
+  const leftParts = String(left).replace(/^v/, "").split(".").map(Number);
+  const rightParts = String(right).replace(/^v/, "").split(".").map(Number);
+  for (let index = 0; index < Math.max(leftParts.length, rightParts.length); index += 1) {
+    const delta = (leftParts[index] || 0) - (rightParts[index] || 0);
+    if (delta !== 0) return delta;
+  }
+  return 0;
+}
+
+async function checkForUpdates() {
+  if (!updateStatus) return;
+  updateStatus.textContent = "Checking...";
+  downloadUpdateBtn.hidden = true;
+  availableUpdateUrl = "";
+  try {
+    const currentVersion = await window.hikaElectron?.getAppVersion?.() || "0.0.0";
+    const response = await fetch(`${apiUrl}/api/desktop/update`);
+    if (!response.ok) throw new Error("Update service unavailable");
+    const release = await response.json();
+    if (release?.downloadUrl && /^https:\/\//i.test(release.downloadUrl) && compareVersions(release.version, currentVersion) > 0) {
+      availableUpdateUrl = release.downloadUrl;
+      updateStatus.textContent = `Version ${release.version} is ready.`;
+      downloadUpdateBtn.hidden = false;
+    } else {
+      updateStatus.textContent = "You are up to date.";
+    }
+  } catch {
+    updateStatus.textContent = "Could not check for updates.";
+  }
 }
 
 // ── Click-through toggle ───────────────────────────────────────────────────────
@@ -330,7 +469,16 @@ function exportSession() {
 // ── Session ───────────────────────────────────────────────────────────────────
 async function handleStart() {
   const title = meetingNameEl.value.trim() || "Meeting";
-  sessionGuidance = (sessionGuidanceEl?.value || "").trim();
+  const jobContext = (jobPostUrl?.value || "").trim();
+  const languageContext = outputLanguage?.value ? `Respond in ${outputLanguage.value}.` : "";
+  sessionGuidance = [
+    selectedSessionMode === "interview" ? "This is an interview. Answer as a confident, experienced candidate." : "This is a regular professional call.",
+    jobContext ? `Job post URL supplied by the user: ${jobContext}` : "",
+    languageContext,
+    (sessionGuidanceEl?.value || "").trim(),
+  ].filter(Boolean).join("\n");
+  forceHttpFallback = false;
+  cancelledRealtimeResponseIds.clear();
   startBtn.disabled   = true;
   startBtn.textContent = "Starting…";
 
@@ -407,6 +555,22 @@ async function startRecording() {
     audioChunks   = [];
     let lastAnalyzedText = "";
 
+    // A persistent WebRTC connection avoids serializing and re-uploading an
+    // ever-growing WebM blob every few seconds. If Realtime is unavailable,
+    // retain the existing recorder/transcription workflow as a safe fallback.
+    if (!forceHttpFallback && await startRealtimeVoice(stream)) {
+      isRecording = true;
+      micBtn.classList.add("recording");
+      micBtn.textContent = "⏹";
+      micBtn.title = "Stop recording";
+      recIndicator.style.display = "inline";
+      statusDot.textContent = "● REC";
+      statusDot.className = "status-dot rec";
+      liveTxEl.style.display = "block";
+      liveTxText.textContent = "";
+      return;
+    }
+
     mediaRecorder.ondataavailable = e => {
       if (e.data && e.data.size > 0) audioChunks.push(e.data);
     };
@@ -420,7 +584,7 @@ async function startRecording() {
       if (text) {
         latestUtterance = text;
         addTranscriptChunk(text);
-        if (text !== lastAnalyzedText && text.trim().length > 12) {
+        if (autoAnswerEnabled && text !== lastAnalyzedText && text.trim().length > 12) {
           lastAnalyzedText = text;
           analyze(text);
         }
@@ -444,7 +608,7 @@ async function startRecording() {
 
       const newChars = text.length - lastAnalyzedText.length;
       const looksComplete = /[.?!,;]\s*$/.test(text) || text.length > 60;
-      if (!isAnalyzing && looksComplete && newChars > 25) {
+      if (autoAnswerEnabled && !isAnalyzing && looksComplete && newChars > 25) {
         lastAnalyzedText = text;
         analyze(text);
       }
@@ -469,6 +633,7 @@ async function startRecording() {
 }
 
 async function stopRecording() {
+  stopRealtimeVoice();
   clearInterval(chunkTimer);
   isRecording = false;
   liveTxEl.style.display     = "none";
@@ -485,6 +650,173 @@ async function stopRecording() {
   }
   mediaRecorder = null;
   stopAudioPipeline();
+}
+
+function stopRealtimeVoice(closedByUser = true) {
+  realtimeClosedByUser = closedByUser;
+  if (realtimeReconnectTimer) clearTimeout(realtimeReconnectTimer);
+  realtimeReconnectTimer = null;
+  if (realtimeEvents) realtimeEvents.close();
+  realtimeEvents = null;
+  if (realtimePeer) realtimePeer.close();
+  realtimePeer = null;
+  realtimeAnswer = "";
+  realtimeResponseId = null;
+  realtimePartialTranscript = "";
+}
+
+async function startRealtimeVoice(stream, reconnect = false) {
+  if (!window.RTCPeerConnection || realtimeConnecting) return false;
+  if (realtimePeer?.connectionState === "connected") return true;
+  if (!stream?.getAudioTracks?.().length) return false;
+  if (reconnect && realtimePeer) stopRealtimeVoice(false);
+
+  realtimeConnecting = true;
+  markRealtimeMetric(reconnect ? "reconnect_started" : "connection_started");
+  realtimeClosedByUser = false;
+  realtimeStream = stream;
+  const peer = new RTCPeerConnection({ bundlePolicy: "max-bundle" });
+  const events = peer.createDataChannel("oai-events");
+  realtimePeer = peer;
+  realtimeEvents = events;
+  realtimeAnswer = "";
+
+  const showRealtimeAnswer = (answer, complete = false) => {
+    const text = (answer || "").trim();
+    if (!text) return;
+    const insight = {
+      question: latestUtterance || "Live question",
+      answer: text,
+      confidence: complete ? "high" : "medium",
+      suggestions: [], sections: [], timestamp: new Date(),
+    };
+    insights[0] = insight;
+    setAnalyzing(!complete);
+    renderInsights();
+  };
+
+  events.addEventListener("message", (event) => {
+    let payload;
+    try { payload = JSON.parse(event.data); } catch { return; }
+    if (payload.type === "input_audio_buffer.speech_started") {
+      markRealtimeMetric("speech_started");
+      if (realtimeResponseId) cancelledRealtimeResponseIds.add(realtimeResponseId);
+      if (cancelledRealtimeResponseIds.size > 64) cancelledRealtimeResponseIds.clear();
+      if (realtimeResponseId && events.readyState === "open") events.send(JSON.stringify({ type: "response.cancel", response_id: realtimeResponseId }));
+      realtimeResponseId = null;
+      realtimeAnswer = "";
+      setAnalyzing(false);
+      statusDot.textContent = "● Speech detected";
+    } else if (payload.type === "input_audio_buffer.speech_stopped") {
+      markRealtimeMetric("speech_stopped");
+      statusDot.textContent = "● Understanding";
+    } else if (payload.type === "conversation.item.input_audio_transcription.delta") {
+      if (payload.delta) markRealtimeMetric("first_transcript_delta");
+      realtimePartialTranscript += payload.delta || "";
+      liveTxText.textContent = realtimePartialTranscript;
+    } else if (payload.type === "conversation.item.input_audio_transcription.completed") {
+      const text = (payload.transcript || "").trim();
+      if (text) {
+        latestUtterance = text;
+        addTranscriptChunk(text);
+        liveTxText.textContent = text;
+      }
+      realtimePartialTranscript = "";
+      markRealtimeMetric("transcript_completed");
+    } else if (payload.type === "response.created") {
+      markRealtimeMetric("response_created");
+      realtimeResponseId = payload.response?.id || payload.response_id || null;
+      realtimeAnswer = "";
+      setAnalyzing(true);
+    } else if (payload.type === "response.output_text.delta") {
+      if (payload.response_id && cancelledRealtimeResponseIds.has(payload.response_id)) return;
+      if (!realtimeAnswer) markRealtimeMetric("first_answer_delta");
+      if (realtimeResponseId && payload.response_id && payload.response_id !== realtimeResponseId) return;
+      realtimeAnswer = appendRealtimeDelta(realtimeAnswer, payload.delta || "");
+      showRealtimeAnswer(realtimeAnswer);
+    } else if (payload.type === "response.output_text.done") {
+      if (payload.response_id && cancelledRealtimeResponseIds.has(payload.response_id)) return;
+      realtimeAnswer = payload.text || realtimeAnswer;
+      showRealtimeAnswer(realtimeAnswer, true);
+    } else if (payload.type === "response.done") {
+      if (payload.response?.id && cancelledRealtimeResponseIds.has(payload.response.id)) return;
+      if (realtimeResponseId && payload.response?.id && payload.response.id !== realtimeResponseId) return;
+      const text = (payload.response?.output || [])
+        .flatMap(item => item.content || [])
+        .map(content => content.text || "").join("") || realtimeAnswer;
+      showRealtimeAnswer(text, true);
+      realtimeResponseId = null;
+      markRealtimeMetric("response_completed");
+      statusDot.textContent = isRecording ? "● REC" : "● Live";
+    }
+  });
+
+  const scheduleReconnect = () => {
+    if (realtimeClosedByUser || realtimePeer !== peer || realtimeReconnectTimer) return;
+    const attempt = ++realtimeReconnectAttempts;
+    if (attempt > 3) {
+      forceHttpFallback = true;
+      stopRealtimeVoice(false);
+      statusDot.textContent = "● Fallback mode";
+      // Recreate the recorder only after the peer and tracks are closed, so
+      // a microphone is never streamed and uploaded at the same time.
+      isRecording = false;
+      stopAudioPipeline();
+      setTimeout(() => { void startRecording(); }, 0);
+      return;
+    }
+    statusDot.textContent = "● Reconnecting";
+    markRealtimeMetric("reconnect_scheduled");
+    realtimeReconnectTimer = setTimeout(() => {
+      realtimeReconnectTimer = null;
+      if (!realtimeClosedByUser && realtimeStream) void startRealtimeVoice(realtimeStream, true);
+    }, Math.min(8000, 500 * 2 ** (attempt - 1)));
+  };
+  peer.addEventListener("connectionstatechange", () => {
+    if (realtimePeer !== peer) return;
+    if (peer.connectionState === "connected") {
+      realtimeReconnectAttempts = 0;
+      statusDot.textContent = "● Listening";
+      markRealtimeMetric(reconnect ? "reconnect_completed" : "connection_completed");
+    } else if (peer.connectionState === "failed" || peer.connectionState === "disconnected") scheduleReconnect();
+  });
+  events.addEventListener("close", scheduleReconnect);
+  events.addEventListener("error", scheduleReconnect);
+
+  try {
+    stream.getAudioTracks().forEach(track => peer.addTrack(track, stream));
+    const offer = await peer.createOffer();
+    await peer.setLocalDescription(offer);
+    const authorization = await fetch(apiUrl + "/api/openai/realtime/session", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}),
+      },
+      body: JSON.stringify({ sessionGuidance, mode: selectedSessionMode === "call" ? "meeting" : "interview", uploadedDocs }),
+    });
+    if (!authorization.ok) throw new Error(`Realtime authorization failed (${authorization.status})`);
+    const { clientSecret } = await authorization.json();
+    if (typeof clientSecret !== "string" || !clientSecret.startsWith("ek_")) throw new Error("Invalid realtime authorization response");
+    const form = new FormData();
+    form.set("sdp", new Blob([offer.sdp || ""], { type: "application/sdp" }), "offer.sdp");
+    const res = await fetch("https://api.openai.com/v1/realtime/calls", {
+      method: "POST", headers: { Authorization: `Bearer ${clientSecret}` }, body: form,
+    });
+    if (!res.ok) throw new Error(`Realtime setup failed (${res.status})`);
+    await peer.setRemoteDescription({ type: "answer", sdp: await res.text() });
+    return true;
+  } catch (error) {
+    console.warn("Realtime voice unavailable; using recording fallback.", error);
+    peer.close();
+    if (realtimePeer === peer) {
+      realtimePeer = null;
+      realtimeEvents = null;
+    }
+    return false;
+  } finally {
+    realtimeConnecting = false;
+  }
 }
 
 function computeLevel(analyser) {
@@ -668,6 +1000,7 @@ async function analyze(utterance) {
       sessionId,
       screenshotBase64: screenshotBase64 || undefined,
       uploadedDocs: uploadedDocs.map(d => ({ id: d.id, name: d.name })),
+      model: selectedModel,
     });
     if (!result) return;
 
@@ -786,6 +1119,13 @@ function renderInsights() {
 function buildInsightCard(ins) {
   const card = document.createElement("div");
   card.className = "ai-card";
+
+  if (ins.question && ins.question !== "Live question") {
+    const question = document.createElement("div");
+    question.className = "ai-q";
+    question.textContent = ins.question;
+    card.appendChild(question);
+  }
 
   const rendered = renderAnswerBlocks(ins);
   card.appendChild(rendered);
@@ -1077,6 +1417,7 @@ function updateLoginStatus() {
   if (logoutBtn) {
     logoutBtn.style.display = authSession ? "block" : "none";
   }
+  if (accountMenuEmail) accountMenuEmail.textContent = authSession?.email || "Not signed in";
 }
 
 function showLoginScreen() {

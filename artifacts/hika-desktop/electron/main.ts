@@ -227,6 +227,16 @@ ipcMain.handle("get-google-client-id", () => {
   return process.env.HIKA_GOOGLE_CLIENT_ID ?? process.env.GOOGLE_CLIENT_ID ?? "";
 });
 
+ipcMain.handle("is-development", () => isDev);
+
+ipcMain.handle("get-app-version", () => app.getVersion());
+
+ipcMain.handle("open-external", async (_event, url: string) => {
+  if (!/^https:\/\//i.test(url)) return false;
+  await shell.openExternal(url);
+  return true;
+});
+
 // Toggle click-through mode
 ipcMain.handle("set-clickthrough", (_e, enabled: boolean) => {
   setClickThrough(enabled);

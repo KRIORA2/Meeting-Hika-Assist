@@ -1,7 +1,7 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { GoogleLogin } from "@react-oauth/google";
 import { useLocation } from "wouter";
-import { ArrowLeft, Download, Eye, EyeOff } from "lucide-react";
+import { ArrowLeft, Eye, EyeOff } from "lucide-react";
 import {
   getAuthSession,
   signInWithGoogleIdToken,
@@ -89,9 +89,6 @@ export default function Login() {
         <div className="flex items-center justify-between gap-3 mb-6">
           <button onClick={() => navigate("/")} className="inline-flex items-center gap-2 text-sm text-white/70 hover:text-white">
             <ArrowLeft size={16} /> Back to home
-          </button>
-          <button onClick={() => navigate("/install")} className="inline-flex items-center gap-2 rounded-2xl border border-white/10 bg-white/5 px-3 py-2 text-xs font-semibold text-white/80 transition hover:bg-white/10">
-            <Download size={14} /> Install Desktop App
           </button>
         </div>
 

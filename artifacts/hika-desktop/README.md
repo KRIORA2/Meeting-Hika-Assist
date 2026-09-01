@@ -56,11 +56,41 @@ Cross-compilation notes:
 - macOS builds require macOS and an Apple Developer ID for notarization
 - Use GitHub Actions (see `.github/workflows/build.yml`) for CI builds
 
+### Windows code signing
+
+Release installers must be signed with a trusted Windows code-signing
+certificate to avoid Microsoft Defender SmartScreen warnings for users.
+electron-builder signs the installer automatically when these protected release
+environment variables are available:
+
+```text
+CSC_LINK=<base64 PFX certificate or secure certificate URL>
+CSC_KEY_PASSWORD=<PFX certificate password>
+```
+
+Store them as GitHub Actions secrets or in the secure environment of the
+Windows release machine. Never commit the certificate or password. An
+organization-validated or EV certificate from a trusted certificate authority
+is required; code changes alone cannot make Windows trust an unsigned app.
+
 ## Environment variables
 
 | Variable | Default | Description |
 |---|---|---|
 | `HIKA_API_URL` | `http://localhost:5000` | URL of the Hika API server |
+
+## Publishing desktop updates
+
+When a new signed installer is published, update these protected API service
+environment variables and redeploy the API:
+
+```text
+DESKTOP_LATEST_VERSION=1.0.1
+DESKTOP_DOWNLOAD_URL=https://your-download-host/Hikanest-Setup.exe
+```
+
+The desktop Account menu compares this version with the installed version and
+shows **Download update** only when a newer HTTPS installer is available.
 
 ## Architecture
 

@@ -56,12 +56,19 @@ function ProtectedShell() {
   );
 }
 
+function ProtectedInstall() {
+  if (!isAuthenticated()) {
+    return <AppRedirect to="/login?next=%2Finstall" />;
+  }
+  return <Install />;
+}
+
 function Router() {
   return (
     <Switch>
       {/* Public landing page — no shell */}
       <Route path="/login" component={Login} />
-      <Route path="/install" component={Install} />
+      <Route path="/install" component={ProtectedInstall} />
       <Route path="/" component={HomeRoute} />
 
       {/* Stealth popup — no shell */}

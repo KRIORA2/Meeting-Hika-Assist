@@ -22,7 +22,6 @@ module.exports = {
   win: {
     target: [{ target: "nsis", arch: ["x64"] }],
     icon: "icon.ico",
-    signAndEditExecutable: false,
     artifactName: "Hikanest-Setup.${ext}",
   },
 
