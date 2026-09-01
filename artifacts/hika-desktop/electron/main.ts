@@ -220,9 +220,9 @@ function createTray() {
 
 const PRODUCTION_API_URL = "https://hikanest-api-v1.onrender.com";
 
-// Development defaults to localhost; packaged builds call the deployed API.
+// Use the deployed API unless a developer explicitly supplies an override.
 ipcMain.handle("get-api-url", () => {
-  return process.env.HIKA_API_URL ?? (isDev ? "http://localhost:5000" : PRODUCTION_API_URL);
+  return process.env.HIKA_API_URL ?? PRODUCTION_API_URL;
 });
 
 ipcMain.handle("get-google-client-id", () => {
