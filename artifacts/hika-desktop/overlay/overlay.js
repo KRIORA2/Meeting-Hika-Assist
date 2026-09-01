@@ -549,7 +549,10 @@ async function toggleRecording() {
 
 async function startRecording() {
   try {
+    statusDot.textContent = "● Connecting microphone";
     const stream = await buildRecordingStream();
+    const track = stream.getAudioTracks()[0];
+    if (!track || track.readyState !== "live") throw new Error("No active microphone track was found.");
     mediaRecorder = new MediaRecorder(stream, { mimeType });
     audioChunks   = [];
     let lastAnalyzedText = "";
@@ -625,7 +628,10 @@ async function startRecording() {
     liveTxText.textContent     = "";
 
   } catch (err) {
-    alert("Microphone access denied. Please allow microphone access for Hikanest.");
+    const message = err instanceof Error ? err.message : "Microphone access failed.";
+    alert(`Microphone could not start.\n\n${message}\n\nAllow microphone access for Hikanest in Windows Settings, then select the correct microphone.`);
+    statusDot.textContent = "● Mic unavailable";
+    statusDot.className = "status-dot";
     stopAudioPipeline();
     console.error(err);
   }
@@ -775,7 +781,7 @@ async function startRealtimeVoice(stream, reconnect = false) {
     if (realtimePeer !== peer) return;
     if (peer.connectionState === "connected") {
       realtimeReconnectAttempts = 0;
-      statusDot.textContent = "● Listening";
+      statusDot.textContent = "● Listening live";
       markRealtimeMetric(reconnect ? "reconnect_completed" : "connection_completed");
     } else if (peer.connectionState === "failed" || peer.connectionState === "disconnected") scheduleReconnect();
   });
