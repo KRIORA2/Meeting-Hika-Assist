@@ -144,6 +144,29 @@ PORT=3000
 
 
 
+\## V1 Deployment
+
+Deploy the API to Render using `render.yaml` from the repository root. Set
+`DATABASE_URL`, `OPENAI_API_KEY`, `GOOGLE_CLIENT_ID` (when Google sign-in is
+enabled), and `CORS_ALLOWED_ORIGINS` in Render. Set `CORS_ALLOWED_ORIGINS` to
+the Vercel production URL, for example `https://your-project.vercel.app`.
+
+Deploy the frontend as a Vercel project from the repository root. Vercel reads
+`vercel.json`; add `VITE_API_URL` with the Render API URL, for example
+`https://your-render-api.onrender.com`, then redeploy the frontend.
+
+For Google sign-in, create a Google OAuth **Web application** client. Add the
+Vercel URL to its Authorized JavaScript origins. In Vercel, set
+`VITE_GOOGLE_CLIENT_ID` to that client ID. In Render, set `GOOGLE_CLIENT_IDS`
+to the exact same value (or set `GOOGLE_CLIENT_ID` to it). After changing a
+Vercel `VITE_` variable, redeploy the frontend because it is embedded at build
+time.
+
+For this first version, uploaded resume and job-description files are stored
+on the Render instance filesystem. They remain available while that instance
+is running, but are removed by instance restarts or redeployments. Use object
+storage before relying on uploads for persistent production records.
+
 \## Roadmap
 
 

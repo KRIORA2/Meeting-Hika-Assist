@@ -12,11 +12,151 @@ const router = Router();
 const DEFAULT_ANALYSIS_MODEL = process.env.OPENAI_MODEL || "gpt-4.1";
 const DEFAULT_TRANSCRIPTION_MODEL = process.env.OPENAI_TRANSCRIPTION_MODEL || "gpt-4o-transcribe";
 const DEFAULT_EMBEDDING_MODEL = process.env.OPENAI_EMBEDDING_MODEL || "text-embedding-3-small";
+const DEFAULT_REALTIME_MODEL = process.env.OPENAI_REALTIME_MODEL || "gpt-realtime";
+const DEFAULT_REALTIME_TRANSCRIPTION_MODEL = process.env.OPENAI_REALTIME_TRANSCRIPTION_MODEL || "gpt-4o-mini-transcribe";
+const DEFAULT_REALTIME_NOISE_REDUCTION = process.env.OPENAI_REALTIME_NOISE_REDUCTION === "far_field" ? "far_field" : "near_field";
+
+function envInteger(name: string, fallback: number, min: number, max: number) {
+  const value = Number.parseInt(process.env[name] ?? "", 10);
+  return Number.isFinite(value) ? Math.max(min, Math.min(max, value)) : fallback;
+}
+
+function envNumber(name: string, fallback: number, min: number, max: number) {
+  const value = Number.parseFloat(process.env[name] ?? "");
+  return Number.isFinite(value) ? Math.max(min, Math.min(max, value)) : fallback;
+}
+
+const REALTIME_CONFIG = {
+  clientSecretTtlSeconds: envInteger("OPENAI_REALTIME_CLIENT_SECRET_TTL_SECONDS", 600, 10, 7200),
+  maxOutputTokens: envInteger("OPENAI_REALTIME_MAX_OUTPUT_TOKENS", 220, 32, 4096),
+  vadThreshold: envNumber("OPENAI_REALTIME_VAD_THRESHOLD", 0.45, 0, 1),
+  vadPrefixPaddingMs: envInteger("OPENAI_REALTIME_VAD_PREFIX_PADDING_MS", 200, 0, 2000),
+  interviewVadSilenceMs: envInteger("INTERVIEW_VAD_SILENCE_MS", 250, 150, 2000),
+  meetingVadSilenceMs: envInteger("MEETING_VAD_SILENCE_MS", 400, 150, 2000),
+};
 
 type EmbeddingCacheEntry = {
   chunks: string[];
   vectors: number[][];
 };
+
+/**
+ * Creates a narrowly scoped, short-lived Realtime credential. The permanent
+ * API key is used only for this server-to-server request and is never sent to
+ * a browser or Electron renderer.
+ */
+router.post("/openai/realtime/session", async (req, res) => {
+  const sessionGuidance = typeof req.body?.sessionGuidance === "string"
+    ? req.body.sessionGuidance.slice(0, 1_500)
+    : "";
+  const mode = req.body?.mode === "meeting" ? "meeting" : "interview";
+  const uploadedDocs = Array.isArray(req.body?.uploadedDocs)
+    ? req.body.uploadedDocs.slice(0, 3).filter((doc: unknown): doc is { id: string; name?: string } =>
+      !!doc && typeof (doc as { id?: unknown }).id === "string")
+    : [];
+
+  if (!process.env.OPENAI_API_KEY) {
+    res.status(503).json({ error: "Realtime voice is not configured on the server." });
+    return;
+  }
+
+  // Document extraction happens once when the persistent Realtime session is
+  // created, never for every partial transcription event.
+  const documentContext: string[] = [];
+  if (uploadedDocs.length) {
+    const uploadDir = path.join(process.cwd(), "uploads");
+    for (const doc of uploadedDocs) {
+      try {
+        const found = fs.existsSync(uploadDir)
+          ? fs.readdirSync(uploadDir).find((file) => file.startsWith(doc.id))
+          : undefined;
+        if (!found) continue;
+        const content = (await extractDocumentText(path.join(uploadDir, found))).replace(/\s+/g, " ").trim();
+        if (content) documentContext.push(`${doc.name || "Profile"}: ${buildResumeSignal(content).slice(0, 900)}`);
+      } catch {
+        // A document is optional context; it must not block live voice setup.
+      }
+    }
+  }
+
+  const modeInstructions = mode === "interview"
+    ? [
+      "The speaker is answering an interviewer. Treat the most recent completed user turn as the exact question, including shorthand and follow-up questions.",
+      "Give a natural answer the speaker can say aloud. Use confident first person only when the supplied candidate context supports it; otherwise give a technically correct answer without inventing experience.",
+      "For behavioural questions, make the answer concrete with a compact situation, action, and result. For technical questions, explain the direct answer first, then one practical example, trade-off, or implementation detail.",
+    ]
+    : [
+      "Treat the most recent completed user turn as the exact request, including shorthand and follow-up questions.",
+      "For decisions or action questions, state the recommendation first, then the brief rationale or next step. Keep related turns connected, but do not summarize the whole meeting unless asked.",
+    ];
+
+  const instructions = [
+    "You are Hikanest Live Assist, a fast, context-aware copilot for live interviews and meetings.",
+    "Understand the speaker's actual intent before answering. Silently correct obvious transcription mistakes, typos, and incomplete phrasing using the surrounding conversation and supplied context.",
+    "Answer the question directly and specifically. Do not give generic advice, a generic summary, an agenda, or chatbot filler such as 'I can help', 'As an AI', or 'Based on the conversation'.",
+    "Output polished natural free text only: no JSON, no confidence score, no role labels, and no headings such as 'Recommended Answer'. Do not repeat the question.",
+    "Use a short paragraph by default; use brief bullets only when they make an explanation, comparison, or steps clearer.",
+    "Be accurate, practical, and specific. Never invent facts, project details, metrics, or candidate experience. If essential information is missing, state the assumption briefly and give the best useful answer.",
+    "Keep ordinary answers under 110 words. Include code only when it is requested, and keep code immediately usable.",
+    ...modeInstructions,
+    sessionGuidance ? `Session guidance:\n${sessionGuidance}` : "",
+    documentContext.length ? `Relevant candidate context (use only when supported):\n${documentContext.join("\n")}` : "",
+  ].filter(Boolean).join("\n");
+
+  const silenceDurationMs = mode === "meeting"
+    ? REALTIME_CONFIG.meetingVadSilenceMs
+    : REALTIME_CONFIG.interviewVadSilenceMs;
+  const session = {
+    type: "realtime",
+    model: DEFAULT_REALTIME_MODEL,
+    output_modalities: ["text"],
+    max_output_tokens: REALTIME_CONFIG.maxOutputTokens,
+    instructions,
+    audio: {
+      input: {
+        noise_reduction: { type: DEFAULT_REALTIME_NOISE_REDUCTION },
+        transcription: { model: DEFAULT_REALTIME_TRANSCRIPTION_MODEL, language: "en" },
+        turn_detection: {
+          type: "server_vad",
+          threshold: REALTIME_CONFIG.vadThreshold,
+          prefix_padding_ms: REALTIME_CONFIG.vadPrefixPaddingMs,
+          silence_duration_ms: silenceDurationMs,
+          create_response: true,
+          interrupt_response: true,
+        },
+      },
+    },
+  };
+
+  try {
+    const upstream = await fetch("https://api.openai.com/v1/realtime/client_secrets", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        expires_after: { anchor: "created_at", seconds: REALTIME_CONFIG.clientSecretTtlSeconds },
+        session,
+      }),
+    });
+    const response = await upstream.json().catch(() => null) as { value?: unknown; expires_at?: unknown } | null;
+    if (!upstream.ok) {
+      req.log.error({ status: upstream.status }, "Realtime client secret request failed");
+      res.status(502).json({ error: "Could not authorize the realtime voice connection." });
+      return;
+    }
+    if (!response || typeof response.value !== "string" || typeof response.expires_at !== "number") {
+      req.log.error("Realtime client secret response was malformed");
+      res.status(502).json({ error: "Realtime authorization response was invalid." });
+      return;
+    }
+    res.json({ clientSecret: response.value, expiresAt: response.expires_at });
+  } catch (err) {
+    req.log.error({ err }, "Realtime client secret request failed");
+    res.status(502).json({ error: "Could not reach the realtime authorization service." });
+  }
+});
 
 const resumeEmbeddingCache = new Map<string, EmbeddingCacheEntry>();
 
@@ -34,7 +174,7 @@ function extractExplicitQuestion(text: string): string | null {
 
 function isResumeQuestion(text: string): boolean {
   const t = text.toLowerCase();
-  return /(tell me about yourself|introduce yourself|walk me through your resume|previous project|current project|roles and responsibilities|what do you do|your background|your experience|why should we hire you)/i.test(t);
+  return /(tell me about yourself|introduce yourself|walk me through your resume|previous project|current project|roles and responsibilities|what do you do|your background|your experience|why should we hire you|read.*resume|analy[sz]e.*resume|uploaded.*resume|resume.*job description|resume.*\bjd\b|job description.*resume|\bjd\b.*resume|act like me|answer as me)/i.test(t);
 }
 
 function isResumeLikeFile(name: string): boolean {

@@ -18,7 +18,9 @@ import {
   Monitor, Video, Wifi, Clock, ChevronRight, MicOff, Download,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { getStoredSessionToken } from "@/lib/auth";
 import InsightAnswer from "@/components/InsightAnswer";
+import { acceptsRealtimeResponseEvent, appendRealtimeDelta } from "@/services/realtimeProtocol";
 
 // ── Document PiP type augmentation ────────────────────────────────────────────
 declare global {
@@ -57,6 +59,16 @@ type TranscriptChunk = {
 };
 
 type SessionMode = "interview" | "meeting";
+type VoiceStatus = "connecting" | "listening" | "speech_detected" | "understanding" | "answering" | "reconnecting" | "fallback" | "disconnected";
+
+type RealtimeEvent = {
+  type?: string;
+  delta?: string;
+  text?: string;
+  transcript?: string;
+  response_id?: string;
+  response?: { id?: string; status?: string; output?: Array<{ content?: Array<{ text?: string }> }> };
+};
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -182,6 +194,12 @@ function InsightCard({ insight }: { insight: Insight }) {
   return (
     <motion.div key={insight.id} initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.25 }} className="flex flex-col gap-3 h-full group">
+      {insight.domain === "Live Assist" && insight.question !== "Live question" && (
+        <div className="rounded-lg border border-indigo-400/15 bg-indigo-400/[0.05] px-3 py-2">
+          <p className="mb-0.5 text-[9px] font-bold uppercase tracking-[0.14em] text-indigo-300/70">Question</p>
+          <p className="line-clamp-2 text-xs leading-relaxed text-slate-300/90">{insight.question}</p>
+        </div>
+      )}
       <div className="text-sm leading-relaxed whitespace-pre-wrap select-text text-slate-100">
         <InsightAnswer answer={insight.answer} sections={insight.sections} className="text-slate-100" />
       </div>
@@ -659,7 +677,8 @@ function PiPContent({
                   toUpload.push({ name: f.name, contentBase64: base64 });
                 }
                 try {
-                  const res = await fetch('/api/documents', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ files: toUpload }) });
+                  const apiUrl = (import.meta.env.VITE_API_URL || '').replace(/\/$/, '');
+                  const res = await fetch(`${apiUrl}/api/documents`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ files: toUpload }) });
                   if (!res.ok) throw new Error('upload failed');
                   const j = await res.json();
                   const added = (j.files || []).map((f: any) => ({ id: f.id, name: f.name }));
@@ -725,6 +744,23 @@ function PiPContent({
   const lastAnalyzedTextRef = useRef<string>("");       // last text we sent to AI — avoid re-analyzing same utterance
   const lastDispatchedAtRef = useRef<number>(0);
   const lastDispatchedQuestionRef = useRef<string>("");
+  const realtimePeerRef = useRef<RTCPeerConnection | null>(null);
+  const realtimeDataRef = useRef<RTCDataChannel | null>(null);
+  const realtimeAnswerRef = useRef("");
+  const realtimeTranscriptRef = useRef("");
+  const realtimePartialTranscriptRef = useRef("");
+  const realtimeResponseIdRef = useRef<string | null>(null);
+  const cancelledResponseIdsRef = useRef<Set<string>>(new Set());
+  const realtimeGenerationRef = useRef(0);
+  const realtimeConnectingRef = useRef(false);
+  const realtimeReconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const realtimeReconnectAttemptRef = useRef(0);
+  const realtimeStreamRef = useRef<MediaStream | null>(null);
+  const realtimeClosedByUserRef = useRef(false);
+  const realtimeFallbackRef = useRef(false);
+  const forceHttpFallbackRef = useRef(false);
+  const fallbackStarterRef = useRef<(() => void) | null>(null);
+  const realtimeMetricsRef = useRef<Record<string, number>>({});
   const revealTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // UI state (restored)
@@ -757,9 +793,17 @@ function PiPContent({
   const [answerReady, setAnswerReady] = useState(false);
   const [micLevel, setMicLevel] = useState(0);
   const [systemLevel, setSystemLevel] = useState(0);
+  const [voiceStatus, setVoiceStatus] = useState<VoiceStatus>("disconnected");
 
-  const [uploadedDocs, setUploadedDocs] = useState<{ id: string; name: string }[]>([]);
-  const uploadedDocsRef = useRef<{ id: string; name: string }[]>([]);
+  const [uploadedDocs, setUploadedDocs] = useState<{ id: string; name: string }[]>(() => {
+    try {
+      const stored = window.localStorage.getItem("hika-uploaded-documents");
+      return stored ? JSON.parse(stored) : [];
+    } catch {
+      return [];
+    }
+  });
+  const uploadedDocsRef = useRef<{ id: string; name: string }[]>(uploadedDocs);
   const conversationHistoryRef = useRef<Array<{ role: "user" | "assistant"; content: string }>>([]);
 
   const createSession = useCreateSession();
@@ -940,6 +984,252 @@ function PiPContent({
     }
   }, [captureScreenshot, analyzeContext]);
 
+  const recordRealtimeMetric = useCallback((name: string) => {
+    const now = performance.now();
+    realtimeMetricsRef.current[name] = now;
+    const speechEnd = realtimeMetricsRef.current.speech_stopped;
+    if (name === "first_answer_delta" && speechEnd) {
+      realtimeMetricsRef.current.speech_end_to_first_answer_ms = Math.round(now - speechEnd);
+    }
+    if (import.meta.env.DEV) {
+      console.debug("[hikanest:realtime]", name, Math.round(now), realtimeMetricsRef.current.speech_end_to_first_answer_ms
+        ? { speech_end_to_first_answer_ms: realtimeMetricsRef.current.speech_end_to_first_answer_ms }
+        : "");
+    }
+  }, []);
+
+  const stopRealtimeStreaming = useCallback((closedByUser = true) => {
+    realtimeClosedByUserRef.current = closedByUser;
+    if (realtimeReconnectTimerRef.current) clearTimeout(realtimeReconnectTimerRef.current);
+    realtimeReconnectTimerRef.current = null;
+    realtimeGenerationRef.current += 1;
+    realtimeDataRef.current?.close();
+    realtimeDataRef.current = null;
+    realtimePeerRef.current?.close();
+    realtimePeerRef.current = null;
+    realtimeAnswerRef.current = "";
+    realtimeTranscriptRef.current = "";
+    realtimePartialTranscriptRef.current = "";
+    realtimeResponseIdRef.current = null;
+  }, []);
+
+  /**
+   * A persistent WebRTC audio track eliminates the repeated upload + full-file
+   * transcription round trips used by the legacy recorder below.  Realtime
+   * emits transcript and answer deltas as soon as they are available.
+   */
+  const startRealtimeStreaming = useCallback(async (stream: MediaStream, reconnect = false): Promise<boolean> => {
+    if (!window.RTCPeerConnection || realtimeConnectingRef.current) return false;
+    if (realtimePeerRef.current?.connectionState === "connected") return true;
+    if (stream.getAudioTracks().length === 0) return false;
+
+    if (reconnect && realtimePeerRef.current) {
+      realtimeDataRef.current?.close();
+      realtimePeerRef.current.close();
+      realtimeDataRef.current = null;
+      realtimePeerRef.current = null;
+    }
+
+    realtimeConnectingRef.current = true;
+    realtimeClosedByUserRef.current = false;
+    realtimeFallbackRef.current = false;
+    realtimeStreamRef.current = stream;
+    setVoiceStatus(reconnect ? "reconnecting" : "connecting");
+    recordRealtimeMetric(reconnect ? "reconnect_started" : "connection_started");
+
+    const generation = realtimeGenerationRef.current + 1;
+    realtimeGenerationRef.current = generation;
+    const peer = new RTCPeerConnection({ bundlePolicy: "max-bundle" });
+    const events = peer.createDataChannel("oai-events");
+    realtimePeerRef.current = peer;
+    realtimeDataRef.current = events;
+    realtimeAnswerRef.current = "";
+    realtimeTranscriptRef.current = "";
+
+    const apiUrl = (import.meta.env.VITE_API_URL || "http://localhost:5000").replace(/\/$/, "");
+    const token = getStoredSessionToken();
+
+    const isCurrent = () => realtimeGenerationRef.current === generation && realtimePeerRef.current === peer;
+    const appendTranscript = (text: string) => {
+      const finalText = text.trim();
+      if (!finalText || finalText === realtimeTranscriptRef.current) return;
+      realtimeTranscriptRef.current = finalText;
+      transcriptRef.current = transcriptRef.current
+        ? `${transcriptRef.current} ${finalText}`
+        : finalText;
+      setLiveTranscript(null);
+      setChunks((prev) => [...prev, {
+        id: crypto.randomUUID(),
+        text: finalText,
+        timestamp: new Date(),
+        isQuestion: looksLikeQuestion(finalText),
+      }]);
+      recordRealtimeMetric("transcript_completed");
+    };
+
+    const showAnswer = (answer: string, done = false) => {
+      const text = answer.trim();
+      if (!text) return;
+      setInsights([{ id: `realtime-${generation}`, question: realtimeTranscriptRef.current || "Live question", answer: text,
+        domain: "Live Assist", suggestions: [], confidence: done ? "high" : "medium", sections: [], timestamp: new Date() }]);
+      setAnswerReady(done);
+    };
+
+    events.addEventListener("message", (event) => {
+      if (!isCurrent()) return;
+      let payload: RealtimeEvent;
+      try { payload = JSON.parse(event.data); } catch { return; }
+
+      if (payload.type === "input_audio_buffer.speech_started") {
+        recordRealtimeMetric("speech_started");
+        if (realtimeResponseIdRef.current) cancelledResponseIdsRef.current.add(realtimeResponseIdRef.current);
+        if (cancelledResponseIdsRef.current.size > 64) cancelledResponseIdsRef.current.clear();
+        realtimeAnswerRef.current = "";
+        realtimeResponseIdRef.current = null;
+        setAnswerReady(false);
+        setVoiceStatus("speech_detected");
+        if (events.readyState === "open") events.send(JSON.stringify({ type: "response.cancel" }));
+      } else if (payload.type === "input_audio_buffer.speech_stopped") {
+        recordRealtimeMetric("speech_stopped");
+        setVoiceStatus("understanding");
+      } else if (payload.type === "conversation.item.input_audio_transcription.delta") {
+        realtimePartialTranscriptRef.current += payload.delta || "";
+        setLiveTranscript(realtimePartialTranscriptRef.current || null);
+        if (payload.delta) recordRealtimeMetric("first_transcript_delta");
+      } else if (payload.type === "conversation.item.input_audio_transcription.completed") {
+        realtimePartialTranscriptRef.current = "";
+        appendTranscript(payload.transcript || "");
+        setLiveTranscript(null);
+      } else if (payload.type === "response.created") {
+        realtimeResponseIdRef.current = payload.response?.id || payload.response_id || null;
+        realtimeAnswerRef.current = "";
+        setVoiceStatus("answering");
+        recordRealtimeMetric("response_created");
+      } else if (payload.type === "response.output_text.delta") {
+        if (!acceptsRealtimeResponseEvent(realtimeResponseIdRef.current, cancelledResponseIdsRef.current, payload.response_id)) return;
+        if (!realtimeAnswerRef.current) recordRealtimeMetric("first_answer_delta");
+        realtimeAnswerRef.current = appendRealtimeDelta(realtimeAnswerRef.current, payload.delta || "");
+        showAnswer(realtimeAnswerRef.current);
+      } else if (payload.type === "response.output_text.done") {
+        if (!acceptsRealtimeResponseEvent(realtimeResponseIdRef.current, cancelledResponseIdsRef.current, payload.response_id)) return;
+        realtimeAnswerRef.current = payload.text || realtimeAnswerRef.current;
+        showAnswer(realtimeAnswerRef.current, true);
+      } else if (payload.type === "response.done") {
+        if (!acceptsRealtimeResponseEvent(realtimeResponseIdRef.current, cancelledResponseIdsRef.current, payload.response?.id)) return;
+        const completedText = payload.response?.output
+          ?.flatMap((item) => item.content || [])
+          .map((content) => content.text || "")
+          .join("") || realtimeAnswerRef.current;
+        showAnswer(completedText, true);
+        realtimeResponseIdRef.current = null;
+        setVoiceStatus("listening");
+        recordRealtimeMetric("response_completed");
+      }
+    });
+
+    const scheduleReconnect = () => {
+      if (!isCurrent() || realtimeClosedByUserRef.current || realtimeFallbackRef.current) return;
+      if (realtimeReconnectTimerRef.current) return;
+      const attempt = realtimeReconnectAttemptRef.current + 1;
+      realtimeReconnectAttemptRef.current = attempt;
+      if (attempt > 3) {
+        realtimeFallbackRef.current = true;
+        forceHttpFallbackRef.current = true;
+        stopRealtimeStreaming(false);
+        setVoiceStatus("fallback");
+        setMicError("Live connection was lost. Hikanest switched to fallback transcription.");
+        fallbackStarterRef.current?.();
+        return;
+      }
+      const delay = Math.min(8_000, 500 * 2 ** (attempt - 1));
+      setVoiceStatus("reconnecting");
+      recordRealtimeMetric("reconnect_scheduled");
+      realtimeReconnectTimerRef.current = setTimeout(() => {
+        realtimeReconnectTimerRef.current = null;
+        if (!realtimeClosedByUserRef.current && realtimeStreamRef.current) {
+          void startRealtimeStreaming(realtimeStreamRef.current, true);
+        }
+      }, delay);
+    };
+
+    peer.addEventListener("connectionstatechange", () => {
+      if (!isCurrent()) return;
+      if (peer.connectionState === "connected") {
+        realtimeReconnectAttemptRef.current = 0;
+        setVoiceStatus("listening");
+        recordRealtimeMetric(reconnect ? "reconnect_completed" : "connection_completed");
+      } else if (peer.connectionState === "failed" || peer.connectionState === "disconnected") {
+        scheduleReconnect();
+      }
+    });
+    events.addEventListener("close", scheduleReconnect);
+    events.addEventListener("error", scheduleReconnect);
+
+    try {
+      stream.getAudioTracks().forEach((track) => peer.addTrack(track, stream));
+      const offer = await peer.createOffer();
+      await peer.setLocalDescription(offer);
+      const authorization = await fetch(`${apiUrl}/api/openai/realtime/session`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify({
+          sessionGuidance: sessionGuidanceRef.current,
+          mode: sessionMode,
+          uploadedDocs: uploadedDocsRef.current,
+        }),
+      });
+      if (!authorization.ok) throw new Error(`Realtime authorization failed (${authorization.status})`);
+      const { clientSecret } = await authorization.json() as { clientSecret?: unknown };
+      if (typeof clientSecret !== "string" || !clientSecret.startsWith("ek_")) throw new Error("Realtime authorization response was invalid");
+
+      const form = new FormData();
+      form.set("sdp", new Blob([offer.sdp || ""], { type: "application/sdp" }), "offer.sdp");
+      const response = await fetch("https://api.openai.com/v1/realtime/calls", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${clientSecret}` },
+        body: form,
+      });
+      if (!response.ok) throw new Error(`Realtime connection failed (${response.status})`);
+      const answerSdp = await response.text();
+      await peer.setRemoteDescription({ type: "answer", sdp: answerSdp });
+      return true;
+    } catch (error) {
+      peer.close();
+      if (realtimePeerRef.current === peer) {
+        realtimePeerRef.current = null;
+        realtimeDataRef.current = null;
+      }
+      console.warn("Realtime voice unavailable; using recording fallback.", error);
+      return false;
+    } finally {
+      realtimeConnectingRef.current = false;
+    }
+  }, [recordRealtimeMetric, sessionMode, stopRealtimeStreaming]);
+
+  useEffect(() => {
+    const recover = () => {
+      if (!micActiveRef.current || realtimeFallbackRef.current || !realtimeStreamRef.current) return;
+      const state = realtimePeerRef.current?.connectionState;
+      if (state !== "connected" && !realtimeConnectingRef.current) {
+        void startRealtimeStreaming(realtimeStreamRef.current, true);
+      }
+    };
+    const onVisibility = () => { if (document.visibilityState === "visible") recover(); };
+    window.addEventListener("online", recover);
+    window.addEventListener("focus", recover);
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      window.removeEventListener("online", recover);
+      window.removeEventListener("focus", recover);
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
+  }, [startRealtimeStreaming]);
+
+  useEffect(() => () => stopRealtimeStreaming(), [stopRealtimeStreaming]);
+
   // ── Recording ─────────────────────────────────────────────────────────────
   //
   // Strategy:
@@ -1008,6 +1298,7 @@ function PiPContent({
   }, [transcribeAudio, runAnalysis]);
 
   const stopMicRecording = useCallback(() => {
+    stopRealtimeStreaming();
     if (recorderRef.current?.state === "recording") {
       recorderRef.current.stop(); // onstop handles everything
     } else {
@@ -1015,7 +1306,7 @@ function PiPContent({
       setMicActive(false);
       setLiveTranscript(null);
     }
-  }, []);
+  }, [stopRealtimeStreaming]);
 
   const computeRmsLevel = useCallback((analyser: AnalyserNode | null): number => {
     if (!analyser) return 0;
@@ -1152,8 +1443,18 @@ function PiPContent({
       allChunksRef.current = [];
       interimBusyRef.current = false;
       lastAnalyzedTextRef.current = "";
-  lastDispatchedAtRef.current = 0;
-  lastDispatchedQuestionRef.current = "";
+      lastDispatchedAtRef.current = 0;
+      lastDispatchedQuestionRef.current = "";
+
+      // Prefer an always-open Realtime connection. Its VAD finalizes turns
+      // after a short pause and streams text deltas without re-uploading audio.
+      if (!forceHttpFallbackRef.current && await startRealtimeStreaming(stream)) {
+        micActiveRef.current = true;
+        setMicActive(true);
+        return;
+      }
+      realtimeFallbackRef.current = true;
+      setVoiceStatus("fallback");
 
       const recorder = new MediaRecorder(stream, { mimeType });
       recorderRef.current = recorder;
@@ -1250,16 +1551,31 @@ function PiPContent({
       setMicError(denied ? "Microphone access denied — allow mic permission in your browser settings." : "Could not access microphone or meeting audio.");
       stopAuxAudioCapture();
     }
-  }, [buildRecordingStream, doInterimTranscription, transcribeAudio, runAnalysis, stopAuxAudioCapture]);
+  }, [buildRecordingStream, doInterimTranscription, transcribeAudio, runAnalysis, startRealtimeStreaming, stopAuxAudioCapture]);
 
   const toggleMic = useCallback(() => {
     if (micActiveRef.current) stopMicRecording(); else startMicRecording();
   }, [startMicRecording, stopMicRecording]);
 
+  // Rebuild a single legacy audio pipeline only after Realtime has fully
+  // stopped. This prevents the same microphone from being sent down both paths.
+  fallbackStarterRef.current = () => {
+    if (!sessionIdRef.current || recorderRef.current || !micActiveRef.current) return;
+    mixedRecordStreamRef.current?.getTracks().forEach((track) => track.stop());
+    mixedRecordStreamRef.current = null;
+    micStreamRef.current?.getTracks().forEach((track) => track.stop());
+    micStreamRef.current = null;
+    stopAuxAudioCapture();
+    micActiveRef.current = false;
+    setMicActive(false);
+    window.setTimeout(() => { void startMicRecording(); }, 0);
+  };
+
 
   // ── Session ───────────────────────────────────────────────────────────────
 
   const releaseMicStream = useCallback(() => {
+    stopRealtimeStreaming();
     if (recorderRef.current?.state === "recording") recorderRef.current.stop();
     recorderRef.current = null;
     micStreamRef.current?.getTracks().forEach((t) => t.stop());
@@ -1268,7 +1584,8 @@ function PiPContent({
     micActiveRef.current = false;
     setMicActive(false);
     setLiveTranscript(null);
-  }, [stopAuxAudioCapture]);
+    setVoiceStatus("disconnected");
+  }, [stopAuxAudioCapture, stopRealtimeStreaming]);
 
   const startSession = useCallback(async (mode?: SessionMode) => {
     const chosenMode = mode ?? sessionMode;
@@ -1281,6 +1598,8 @@ function PiPContent({
     const session = await createSession.mutateAsync({ data: { title: normalizedTitle, platform } });
     sessionIdRef.current = session.id;
     sessionGuidanceRef.current = [sessionGuidance.trim(), modeGuidance].filter(Boolean).join("\n");
+    forceHttpFallbackRef.current = false;
+    cancelledResponseIdsRef.current.clear();
     setShowStart(false);
     setChunks([]); setInsights([]);
     transcriptRef.current = "";
@@ -1521,6 +1840,8 @@ function PiPContent({
               <span className="flex items-center gap-1">
                 <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />Live
               </span>
+              <span>·</span>
+              <span className="capitalize" aria-live="polite">{voiceStatus.replace(/_/g, " ")}</span>
             </div>
           </div>
         </div>

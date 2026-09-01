@@ -12,6 +12,7 @@ import {
   verifyPassword,
   type AuthUser,
 } from "../lib/auth";
+import { logger } from "../lib/logger";
 
 const router = Router();
 
@@ -83,23 +84,28 @@ router.post("/auth/signup", async (req, res) => {
   }
 
   const email = parsed.data.email.trim().toLowerCase();
-  const existing = await db.select().from(users).where(eq(users.email, email));
-  if (existing[0]) {
-    res.status(409).json({ error: "Account already exists" });
-    return;
+  try {
+    const existing = await db.select().from(users).where(eq(users.email, email));
+    if (existing[0]) {
+      res.status(409).json({ error: "Account already exists" });
+      return;
+    }
+
+    const [created] = await db
+      .insert(users)
+      .values({
+        email,
+        passwordHash: hashPassword(parsed.data.password),
+        provider: "password",
+      })
+      .returning();
+
+    const auth = await createSessionForUser(toAuthUser(created), "password");
+    res.status(201).json(auth);
+  } catch (error) {
+    logger.error({ err: error, email }, "Password sign-up persistence failed");
+    res.status(503).json({ error: "Account service is unavailable. Check the Render DATABASE_URL and database migrations." });
   }
-
-  const [created] = await db
-    .insert(users)
-    .values({
-      email,
-      passwordHash: hashPassword(parsed.data.password),
-      provider: "password",
-    })
-    .returning();
-
-  const auth = await createSessionForUser(toAuthUser(created), "password");
-  res.status(201).json(auth);
 });
 
 router.post("/auth/login", async (req, res) => {
@@ -110,14 +116,19 @@ router.post("/auth/login", async (req, res) => {
   }
 
   const email = parsed.data.email.trim().toLowerCase();
-  const [found] = await db.select().from(users).where(eq(users.email, email));
-  if (!found || !verifyPassword(parsed.data.password, found.passwordHash)) {
-    res.status(401).json({ error: "Invalid email or password" });
-    return;
-  }
+  try {
+    const [found] = await db.select().from(users).where(eq(users.email, email));
+    if (!found || !verifyPassword(parsed.data.password, found.passwordHash)) {
+      res.status(401).json({ error: "Invalid email or password" });
+      return;
+    }
 
-  const auth = await createSessionForUser(toAuthUser(found), found.provider || "password");
-  res.json(auth);
+    const auth = await createSessionForUser(toAuthUser(found), found.provider || "password");
+    res.json(auth);
+  } catch (error) {
+    logger.error({ err: error, email }, "Password sign-in persistence failed");
+    res.status(503).json({ error: "Account service is unavailable. Check the Render DATABASE_URL and database migrations." });
+  }
 });
 
 router.post("/auth/google", async (req, res) => {
@@ -132,19 +143,32 @@ router.post("/auth/google", async (req, res) => {
     return;
   }
 
+  let payload: { email?: string; sub?: string } | undefined;
   try {
     const ticket = await googleClient.verifyIdToken({
       idToken: parsed.data.idToken,
       audience: googleAudiences,
     });
-    const payload = ticket.getPayload();
-    const email = payload?.email?.trim().toLowerCase();
-    const googleSub = payload?.sub;
-    if (!email || !googleSub) {
-      res.status(401).json({ error: "Invalid Google identity token" });
-      return;
-    }
+    payload = ticket.getPayload();
+  } catch (error) {
+    logger.warn({
+      err: error,
+      configuredAudienceCount: googleAudiences.length,
+    }, "Google ID token verification rejected");
+    res.status(401).json({
+      error: "Google token was rejected. Set VITE_GOOGLE_CLIENT_ID in Vercel and GOOGLE_CLIENT_IDS in Render to the same Web OAuth client ID, then redeploy both services.",
+    });
+    return;
+  }
 
+  const email = payload?.email?.trim().toLowerCase();
+  const googleSub = payload?.sub;
+  if (!email || !googleSub) {
+    res.status(401).json({ error: "Google did not provide a valid account identity." });
+    return;
+  }
+
+  try {
     let [user] = await db.select().from(users).where(eq(users.email, email));
     if (!user) {
       [user] = await db
@@ -166,8 +190,8 @@ router.post("/auth/google", async (req, res) => {
     const auth = await createSessionForUser(toAuthUser(user), "google");
     res.json(auth);
   } catch (error) {
-    console.error("Google sign-in verification failed:", error);
-    res.status(401).json({ error: "Google sign-in verification failed" });
+    logger.error({ err: error, email }, "Google sign-in persistence failed");
+    res.status(500).json({ error: "Google account verification succeeded, but the account could not be created. Check the Render database logs and migrations." });
   }
 });
 
