@@ -46,6 +46,9 @@ let realtimeStream = null;
 let realtimeReconnectTimer = null;
 let realtimeReconnectAttempts = 0;
 let realtimePartialTranscript = "";
+let realtimeTranscriptFinalized = false;
+let realtimeStopRequested = false;
+let realtimeResponseRequested = false;
 let forceHttpFallback = false;
 const useRealtimeVoice = true;
 const realtimeMetrics = {};
@@ -128,6 +131,7 @@ const autoAnswer      = $("auto-answer");
 const saveTranscript  = $("save-transcript");
 const setupUploadedList = $("setup-uploaded-list");
 const accountMenuBtn = $("account-menu-btn");
+const accountMenuWrap = accountMenuBtn?.closest(".account-menu-wrap");
 const accountMenu = $("account-menu");
 const accountMenuEmail = $("account-menu-email");
 const checkUpdateBtn = $("check-update-btn");
@@ -183,13 +187,25 @@ async function init() {
     wndMinBtn.addEventListener("click", minimizeToLauncher);
   }
   minimizedLauncher?.addEventListener("click", restoreFromLauncher);
-  accountMenuBtn?.addEventListener("click", () => { accountMenu.hidden = !accountMenu.hidden; });
+  accountMenuBtn?.addEventListener("click", (event) => {
+    event.stopPropagation();
+    accountMenu.hidden = !accountMenu.hidden;
+  });
   checkUpdateBtn?.addEventListener("click", checkForUpdates);
   downloadUpdateBtn?.addEventListener("click", () => {
     if (availableUpdateUrl) window.hikaElectron?.openExternal(availableUpdateUrl);
+    closeAccountMenu();
   });
-  $("open-dashboard-btn")?.addEventListener("click", () => showToast("Dashboard URL is configured on the web app."));
-  $("menu-logout-btn")?.addEventListener("click", async () => { await clearAuthSession(); await clearAuthToken(); accountMenu.hidden = true; showSetupScreen(); });
+  $("open-dashboard-btn")?.addEventListener("click", () => {
+    closeAccountMenu();
+    showToast("Dashboard URL is configured on the web app.");
+  });
+  $("menu-logout-btn")?.addEventListener("click", async () => {
+    closeAccountMenu();
+    await clearAuthSession();
+    await clearAuthToken();
+    showSetupScreen();
+  });
   privateOverlay?.addEventListener("change", () => {
     if (!privateOverlay.checked) showToast("Screen-share protection remains enabled for safety.");
     privateOverlay.checked = true;
@@ -197,6 +213,9 @@ async function init() {
   if (wndCloseBtn) {
     wndCloseBtn.addEventListener("click", () => window.hikaElectron?.close());
   }
+  document.addEventListener("click", (event) => {
+    if (!accountMenu.hidden && !accountMenuWrap?.contains(event.target)) closeAccountMenu();
+  });
   askBtn.addEventListener("click", handleManualAsk);
   askInput.addEventListener("keydown", e => { if (e.key === "Enter") handleManualAsk(); });
   exportBtn.addEventListener("click", exportSession);
@@ -257,6 +276,12 @@ async function init() {
   // Ctrl+Shift+H = hide to tray
   // Ctrl+Shift+C = toggle click-through mode
   document.addEventListener("keydown", e => {
+    if (e.key === "Escape" && !accountMenu.hidden) {
+      e.preventDefault();
+      closeAccountMenu();
+      return;
+    }
+
     if (e.ctrlKey && e.shiftKey && e.key === "H") {
       e.preventDefault();
       window.hikaElectron?.hide();
@@ -268,6 +293,10 @@ async function init() {
       showToast(`Click-through ${clickThrough ? "On" : "Off"}`);
     }
   });
+}
+
+function closeAccountMenu() {
+  if (accountMenu) accountMenu.hidden = true;
 }
 
 async function uploadDocuments(files, listElement) {
@@ -568,7 +597,7 @@ async function startRecording() {
       recIndicator.style.display = "inline";
       statusDot.textContent = "● REC";
       statusDot.className = "status-dot rec";
-      liveTxEl.style.display = "block";
+      liveTxEl.style.display = "flex";
       liveTxText.textContent = "";
       return;
     }
@@ -586,7 +615,9 @@ async function startRecording() {
       if (text) {
         latestUtterance = text;
         addTranscriptChunk(text);
-        if (autoAnswerEnabled && text !== lastAnalyzedText && text.trim().length > 12) {
+        liveTxText.textContent = text;
+        liveTxEl.style.display = "flex";
+        if (autoAnswerEnabled && text.trim().length > 12) {
           lastAnalyzedText = text;
           analyze(text);
         }
@@ -606,14 +637,8 @@ async function startRecording() {
 
       latestUtterance = text;
       liveTxText.textContent = text;
-      liveTxEl.style.display = "block";
+      liveTxEl.style.display = "flex";
 
-      const newChars = text.length - lastAnalyzedText.length;
-      const looksComplete = /[.?!,;]\s*$/.test(text) || text.length > 60;
-      if (autoAnswerEnabled && !isAnalyzing && looksComplete && newChars > 25) {
-        lastAnalyzedText = text;
-        analyze(text);
-      }
     }, 2500);
 
     mediaRecorder.start();
@@ -624,7 +649,7 @@ async function startRecording() {
     recIndicator.style.display = "inline";
     statusDot.textContent      = "● REC";
     statusDot.className        = "status-dot rec";
-    liveTxEl.style.display     = "block";
+    liveTxEl.style.display     = "flex";
     liveTxText.textContent     = "";
 
   } catch (err) {
@@ -638,9 +663,9 @@ async function startRecording() {
 }
 
 async function stopRecording() {
+  if (!isRecording) return;
   clearInterval(chunkTimer);
   isRecording = false;
-  liveTxEl.style.display     = "none";
   micBtn.classList.remove("recording");
   micBtn.textContent         = "🎤";
   micBtn.title               = "Record";
@@ -650,13 +675,17 @@ async function stopRecording() {
 
   if (realtimePeer?.connectionState === "connected" && realtimeEvents?.readyState === "open") {
     statusDot.textContent = "● Preparing answer";
+    realtimeStopRequested = true;
+    realtimeResponseRequested = false;
     mediaRecorder?.stream.getTracks().forEach(t => t.stop());
     stopAudioPipeline();
-    setTimeout(() => {
-      if (realtimeEvents?.readyState === "open") {
+    if (realtimeEvents?.readyState === "open") {
+      realtimeEvents.send(JSON.stringify({ type: "input_audio_buffer.commit" }));
+      if (realtimeTranscriptFinalized && latestUtterance.trim()) {
+        realtimeResponseRequested = true;
         realtimeEvents.send(JSON.stringify({ type: "response.create" }));
       }
-    }, 1000);
+    }
     return;
   }
 
@@ -679,6 +708,9 @@ function stopRealtimeVoice(closedByUser = true) {
   realtimeAnswer = "";
   realtimeResponseId = null;
   realtimePartialTranscript = "";
+  realtimeTranscriptFinalized = false;
+  realtimeStopRequested = false;
+  realtimeResponseRequested = false;
 }
 
 async function startRealtimeVoice(stream, reconnect = false) {
@@ -696,6 +728,9 @@ async function startRealtimeVoice(stream, reconnect = false) {
   realtimePeer = peer;
   realtimeEvents = events;
   realtimeAnswer = "";
+  realtimeStopRequested = false;
+  realtimeResponseRequested = false;
+  realtimeTranscriptFinalized = false;
 
   const showRealtimeAnswer = (answer, complete = false) => {
     const text = (answer || "").trim();
@@ -729,6 +764,7 @@ async function startRealtimeVoice(stream, reconnect = false) {
     } else if (payload.type === "conversation.item.input_audio_transcription.delta") {
       if (payload.delta) markRealtimeMetric("first_transcript_delta");
       realtimePartialTranscript += payload.delta || "";
+      realtimeTranscriptFinalized = false;
       liveTxText.textContent = realtimePartialTranscript;
     } else if (payload.type === "conversation.item.input_audio_transcription.completed") {
       const text = (payload.transcript || realtimePartialTranscript || "").trim();
@@ -736,8 +772,13 @@ async function startRealtimeVoice(stream, reconnect = false) {
         latestUtterance = text;
         addTranscriptChunk(text);
         liveTxText.textContent = text;
+        if (realtimeStopRequested && !realtimeResponseRequested) {
+          realtimeResponseRequested = true;
+          if (events.readyState === "open") events.send(JSON.stringify({ type: "response.create" }));
+        }
       }
       realtimePartialTranscript = text;
+      realtimeTranscriptFinalized = Boolean(text);
       markRealtimeMetric("transcript_completed");
     } else if (payload.type === "response.created") {
       markRealtimeMetric("response_created");
@@ -764,7 +805,7 @@ async function startRealtimeVoice(stream, reconnect = false) {
       realtimeResponseId = null;
       markRealtimeMetric("response_completed");
       statusDot.textContent = isRecording ? "● REC" : "● Live";
-      if (!isRecording) stopRealtimeVoice();
+      if (realtimeStopRequested || !isRecording) stopRealtimeVoice();
     }
   });
 
@@ -1246,6 +1287,17 @@ function renderAnswerBlocks(ins) {
     });
 
   const isPureCode = blocks.length > 0 && answer === blocks[0].content;
+  blocks.forEach((b) => {
+    const block = document.createElement("div");
+    block.className = "ai-code-block";
+    block.innerHTML = `
+      <div class="ai-code-lbl">${escHtml(b.title || "Code")}</div>
+      <pre>${escHtml(b.content)}</pre>
+    `;
+    block.appendChild(makeCopyBtn(b.content));
+    wrap.appendChild(block);
+  });
+
   if (!isPureCode && answer) {
     const aWrap = document.createElement("div");
     aWrap.className = "ai-a-wrap";
@@ -1265,17 +1317,6 @@ function renderAnswerBlocks(ins) {
       <div class="ai-code-lbl">${escHtml(section.title || "Details")}</div>
       <div class="ai-a">${escHtml(section.content || "")}</div>
     `;
-    wrap.appendChild(block);
-  });
-
-  blocks.forEach((b) => {
-    const block = document.createElement("div");
-    block.className = "ai-code-block";
-    block.innerHTML = `
-      <div class="ai-code-lbl">${escHtml(b.title || "Code")}</div>
-      <pre>${escHtml(b.content)}</pre>
-    `;
-    block.appendChild(makeCopyBtn(b.content));
     wrap.appendChild(block);
   });
 

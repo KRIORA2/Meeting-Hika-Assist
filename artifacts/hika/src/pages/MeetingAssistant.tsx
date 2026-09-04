@@ -749,7 +749,10 @@ function PiPContent({
   const realtimeAnswerRef = useRef("");
   const realtimeTranscriptRef = useRef("");
   const realtimePartialTranscriptRef = useRef("");
+  const realtimeTranscriptFinalizedRef = useRef(false);
   const realtimeResponseIdRef = useRef<string | null>(null);
+  const realtimeStopRequestedRef = useRef(false);
+  const realtimeResponseRequestedRef = useRef(false);
   const cancelledResponseIdsRef = useRef<Set<string>>(new Set());
   const realtimeGenerationRef = useRef(0);
   const realtimeConnectingRef = useRef(false);
@@ -1010,6 +1013,10 @@ function PiPContent({
     realtimeAnswerRef.current = "";
     realtimeTranscriptRef.current = "";
     realtimePartialTranscriptRef.current = "";
+    realtimeTranscriptFinalizedRef.current = false;
+    realtimeStopRequestedRef.current = false;
+    realtimeResponseRequestedRef.current = false;
+    realtimePartialTranscriptRef.current = "";
     realtimeResponseIdRef.current = null;
   }, []);
 
@@ -1094,12 +1101,19 @@ function PiPContent({
         setVoiceStatus("understanding");
       } else if (payload.type === "conversation.item.input_audio_transcription.delta") {
         realtimePartialTranscriptRef.current += payload.delta || "";
+        realtimeTranscriptFinalizedRef.current = false;
         setLiveTranscript(realtimePartialTranscriptRef.current || null);
         if (payload.delta) recordRealtimeMetric("first_transcript_delta");
       } else if (payload.type === "conversation.item.input_audio_transcription.completed") {
         realtimePartialTranscriptRef.current = "";
         appendTranscript(payload.transcript || "");
+        realtimeTranscriptFinalizedRef.current = true;
         setLiveTranscript(null);
+        if (realtimeStopRequestedRef.current && !realtimeResponseRequestedRef.current
+          && (payload.transcript || realtimeTranscriptRef.current).trim()) {
+          realtimeResponseRequestedRef.current = true;
+          if (events.readyState === "open") events.send(JSON.stringify({ type: "response.create" }));
+        }
       } else if (payload.type === "response.created") {
         realtimeResponseIdRef.current = payload.response?.id || payload.response_id || null;
         realtimeAnswerRef.current = "";
@@ -1124,6 +1138,7 @@ function PiPContent({
         realtimeResponseIdRef.current = null;
         setVoiceStatus("listening");
         recordRealtimeMetric("response_completed");
+        if (realtimeStopRequestedRef.current) stopRealtimeStreaming();
       }
     });
 
@@ -1259,45 +1274,26 @@ function PiPContent({
         liveTranscriptRef.current = merged;
         setLiveTranscript(merged);
 
-        // ── Instant analysis (Parakeet-style) ─────────────────────────────
-        // Fire analysis immediately as each live transcription chunk arrives.
-        // Only fire if the text changed meaningfully (>25 new chars) from the
-        // last thing we already analyzed — prevents spam-calling the AI on
-        // unchanged or near-identical utterances.
-        const lastAnalyzed = lastAnalyzedTextRef.current;
-        const now = Date.now();
-        const questionCandidate = extractLatestQuestionCandidate(merged, lastAnalyzed);
-        const deltaText = lastAnalyzed && merged.startsWith(lastAnalyzed)
-          ? merged.slice(lastAnalyzed.length).trim()
-          : merged;
-        const hasPauseBoundary = /[.?!]\s*$/.test(merged);
-
-        if (
-          !isAnalyzingRef.current
-          && questionCandidate
-          && questionCandidate !== lastDispatchedQuestionRef.current
-          && questionCandidate.length > 14
-        ) {
-          lastDispatchedQuestionRef.current = questionCandidate;
-          lastAnalyzedTextRef.current = merged;
-          lastDispatchedAtRef.current = now;
-          runAnalysis({ utterance: questionCandidate }); // fire-and-forget
-        } else if (
-          !isAnalyzingRef.current
-          && hasPauseBoundary
-          && deltaText.length > 28
-          && now - lastDispatchedAtRef.current > 1400
-        ) {
-          lastAnalyzedTextRef.current = merged;
-          lastDispatchedAtRef.current = now;
-          runAnalysis({ utterance: deltaText }); // fire-and-forget
-        }
       }
     } catch { /* interim errors are silent */ }
     finally { interimBusyRef.current = false; }
   }, [transcribeAudio, runAnalysis]);
 
   const stopMicRecording = useCallback(() => {
+    if (!micActiveRef.current && !recorderRef.current) return;
+    if (realtimePeerRef.current?.connectionState === "connected" && realtimeDataRef.current?.readyState === "open") {
+      micActiveRef.current = false;
+      setMicActive(false);
+      realtimeStopRequestedRef.current = true;
+      realtimeStreamRef.current?.getTracks().forEach((track) => track.stop());
+      realtimeDataRef.current.send(JSON.stringify({ type: "input_audio_buffer.commit" }));
+      if (realtimeTranscriptFinalizedRef.current && realtimeTranscriptRef.current.trim()) {
+        realtimeResponseRequestedRef.current = true;
+        realtimeDataRef.current.send(JSON.stringify({ type: "response.create" }));
+      }
+      setVoiceStatus("understanding");
+      return;
+    }
     stopRealtimeStreaming();
     if (recorderRef.current?.state === "recording") {
       recorderRef.current.stop(); // onstop handles everything
@@ -1484,24 +1480,11 @@ function PiPContent({
         recorderRef.current = null;
         setMicActive(false);
 
-        // Grab the latest live text before clearing — use it to start analysis NOW
-        const latestLive = liveTranscriptRef.current;
         liveTranscriptRef.current = null;
         setLiveTranscript(null); // clear live preview immediately
 
         const blob = new Blob(allChunksRef.current, { type: mimeType });
         if (blob.size < 500) return;
-
-        // ── Parallel strategy for minimum latency ──────────────────────────
-        // 1. Fire AI analysis immediately using the live transcript we already
-        //    have — the user sees the answer in ~1–1.5 s (just the AI call).
-        // 2. Run the final authoritative transcription in parallel — once done,
-        //    it commits the permanent chunk to the left panel.
-        //    If no live text was available yet, analysis fires after transcription.
-
-        if (latestLive) {
-          runAnalysis({ utterance: latestLive }); // fire-and-forget — only the latest utterance
-        }
 
         setIsTranscribing(true);
         try {
@@ -1518,8 +1501,7 @@ function PiPContent({
               timestamp: new Date(),
               isQuestion: looksLikeQuestion(finalText),
             }]);
-            // If no live text was available, fire analysis now with the final utterance
-            if (!latestLive) runAnalysis({ utterance: finalText });
+            runAnalysis({ utterance: finalText });
           }
         } catch (err) {
           console.error("TRANSCRIBE ERROR:", err);

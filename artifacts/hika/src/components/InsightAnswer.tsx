@@ -115,21 +115,6 @@ export default function InsightAnswer({ answer, sections, className, compact = f
 
   return (
     <div className="space-y-2">
-      {showProse && (
-        <p className={cn("text-sm leading-relaxed whitespace-pre-wrap", className)}>{answer}</p>
-      )}
-      {textBlocks.map((block, i) => (
-        <div key={`text-${i}`} className="rounded-md border border-border overflow-hidden bg-muted/10">
-          {!compact && (
-            <div className="px-2.5 py-1 text-[10px] uppercase tracking-wider text-muted-foreground border-b border-border bg-muted/20">
-              {block.title}
-            </div>
-          )}
-          <div className={cn(compact ? "text-[11px] p-2" : "text-sm p-3", "leading-relaxed whitespace-pre-wrap text-muted-foreground")}>
-            {block.content}
-          </div>
-        </div>
-      ))}
       {codeBlocks.map((block, i) => (
         <div key={`${block.language}-${i}`} className="rounded-md border border-border overflow-hidden bg-black/50">
           {!compact && (
@@ -143,6 +128,21 @@ export default function InsightAnswer({ answer, sections, className, compact = f
           )}>
             {block.content}
           </pre>
+        </div>
+      ))}
+      {showProse && (
+        <p className={cn("text-sm leading-relaxed whitespace-pre-wrap", className)}>{answer}</p>
+      )}
+      {textBlocks.map((block, i) => (
+        <div key={`text-${i}`} className="rounded-md border border-border overflow-hidden bg-muted/10">
+          {!compact && (
+            <div className="px-2.5 py-1 text-[10px] uppercase tracking-wider text-muted-foreground border-b border-border bg-muted/20">
+              {block.title}
+            </div>
+          )}
+          <div className={cn(compact ? "text-[11px] p-2" : "text-sm p-3", "leading-relaxed whitespace-pre-wrap text-muted-foreground")}>
+            {block.content}
+          </div>
         </div>
       ))}
     </div>

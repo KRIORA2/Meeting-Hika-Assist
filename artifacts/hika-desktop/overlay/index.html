@@ -128,6 +128,17 @@
     <!-- Split view -->
     <div class="split">
 
+      <!-- Live transcription area -->
+      <div class="live-transcription-pane">
+        <div class="pane-hdr">
+          <span class="pane-lbl">Live Transcription</span>
+        </div>
+        <div id="live-tx" class="tx-live" style="display:none">
+          <span class="tx-live-lbl">● LIVE</span>
+          <span id="live-tx-text"></span><span class="cursor">▋</span>
+        </div>
+      </div>
+
       <!-- Transcript pane -->
       <div class="tx-pane">
         <div class="pane-hdr">
@@ -136,10 +147,6 @@
         </div>
         <div class="scroll" id="tx-scroll">
           <div class="empty-hint"><span>🎤</span>Tap Record to start</div>
-        </div>
-        <div id="live-tx" class="tx-live" style="display:none">
-          <span class="tx-live-lbl">● LIVE</span>
-          <span id="live-tx-text"></span><span class="cursor">▋</span>
         </div>
       </div>
 

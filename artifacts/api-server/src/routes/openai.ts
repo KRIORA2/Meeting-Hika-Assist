@@ -98,6 +98,7 @@ router.post("/openai/realtime/session", async (req, res) => {
     "Use a short paragraph by default; use brief bullets only when they make an explanation, comparison, or steps clearer.",
     "Be accurate, practical, and specific. Never invent facts, project details, metrics, or candidate experience. If essential information is missing, state the assumption briefly and give the best useful answer.",
     "Keep ordinary answers under 140 words while remaining direct. For interview questions, give a detailed candidate answer with responsibilities, technical decisions, impact, and one relevant example when supported by supplied context. Include code only when it is requested, and keep code immediately usable.",
+    "For technical questions that request code, scripts, or queries, especially SQL, Python, PySpark, Spark SQL, Databricks, or Scala, output the complete runnable code/query first, then explain it, then add only necessary assumptions or notes. Do not explain at length before the code.",
     ...modeInstructions,
     sessionGuidance ? `Session guidance:\n${sessionGuidance}` : "",
     documentContext.length ? `Relevant candidate context (use only when supported):\n${documentContext.join("\n")}` : "",
@@ -817,6 +818,7 @@ When answering questions:
 - For interview questions, respond like an interview-winning candidate: polished, confident, tailored to the resume, and grounded in real experience.
 - For technical questions, provide complete and accurate solutions with practical reasoning.
 - For SQL, Python, PySpark, Azure, data engineering, or development questions, provide working code or queries when appropriate.
+- For any question asking for code, a script, or a query, especially SQL, Python, PySpark, Spark SQL, Databricks, Scala, or similar technologies, put the complete runnable code/query first. Put the explanation immediately after the code, followed by only necessary assumptions or notes. Never put a long explanation before the code.
 - For coding tasks, understand the existing architecture before suggesting changes and avoid isolated snippets unless the user asks for them.
 - Explain why a change is useful or necessary when it adds value.
 - Make the answer feel as if it was written by a real expert, not a template or a generic AI assistant.
@@ -853,6 +855,7 @@ Important:
 - Never use "Meeting context" as the question label.
 - Never write placeholder code like "# your logic here" or "...".
 - For SQL/Python/PySpark/code requests, the top-level answer should be code-first and not prose.
+- For code-first requests, make the first answer content the complete executable code/query; explanations belong after it in the sections.
 - For interview or meeting answers, return only the polished answer the candidate should say. Do not include keywords, resume matches, follow-up suggestions, interview tips, confidence scores, headings, or labels.
 - Do not apologize or add meta-commentary.`,
         },
@@ -890,6 +893,11 @@ Important:
       ...s,
       language: normalizeLanguage(s.language),
     }));
+    sections.sort((left, right) => {
+      const leftIsCode = /^(code|sql|python|pyspark|scala|bash|hcl|json)$/i.test(left.type) || /^(sql|python|scala|bash|hcl|json)$/i.test(left.language);
+      const rightIsCode = /^(code|sql|python|pyspark|scala|bash|hcl|json)$/i.test(right.type) || /^(sql|python|scala|bash|hcl|json)$/i.test(right.language);
+      return Number(rightIsCode) - Number(leftIsCode);
+    });
 
     const recommendedAnswer = typeof result.recommendedAnswer === "string" ? result.recommendedAnswer.trim() : "";
 
