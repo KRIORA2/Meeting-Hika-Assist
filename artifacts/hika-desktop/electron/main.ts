@@ -2,6 +2,7 @@ import {
   app, BrowserWindow, Tray, Menu, ipcMain,
   nativeImage, screen, desktopCapturer, shell, safeStorage,
 } from "electron";
+import { autoUpdater } from "electron-updater";
 import path from "path";
 import fs from "fs";
 
@@ -12,6 +13,104 @@ let tray: Tray | null = null;
 let buildTrayMenu: (() => Menu) | null = null;
 let clickThroughEnabled = false;
 let pendingDesktopAuthCode: string | null = null;
+let updateCheckInFlight = false;
+let updateDownloadInFlight = false;
+let updateSessionActive = false;
+let updateCheckTimer: ReturnType<typeof setInterval> | null = null;
+
+type UpdateState = "checking" | "update-available" | "downloading" | "update-downloaded" | "up-to-date" | "error";
+
+type UpdateStatePayload = {
+  state: UpdateState;
+  currentVersion: string;
+  version?: string;
+  percent?: number;
+  message?: string;
+};
+
+function sendUpdateState(payload: Omit<UpdateStatePayload, "currentVersion">) {
+  overlayWindow?.webContents.send("update-state", {
+    ...payload,
+    currentVersion: app.getVersion(),
+  } satisfies UpdateStatePayload);
+}
+
+function configureAutoUpdater() {
+  if (isDev) return;
+
+  autoUpdater.autoDownload = false;
+  autoUpdater.autoInstallOnAppQuit = false;
+
+  const prereleaseIdentifier = app.getVersion().match(/^[^+]+-([0-9A-Za-z-]+)/)?.[1];
+  if (prereleaseIdentifier) {
+    autoUpdater.allowPrerelease = true;
+    autoUpdater.channel = prereleaseIdentifier;
+  }
+
+  autoUpdater.on("checking-for-update", () => {
+    sendUpdateState({ state: "checking" });
+  });
+  autoUpdater.on("update-available", (info) => {
+    updateCheckInFlight = false;
+    sendUpdateState({ state: "update-available", version: info.version });
+  });
+  autoUpdater.on("update-not-available", () => {
+    updateCheckInFlight = false;
+    sendUpdateState({ state: "up-to-date" });
+  });
+  autoUpdater.on("download-progress", (progress) => {
+    sendUpdateState({ state: "downloading", percent: Math.max(0, Math.min(100, progress.percent)) });
+  });
+  autoUpdater.on("update-downloaded", (info) => {
+    updateCheckInFlight = false;
+    updateDownloadInFlight = false;
+    sendUpdateState({ state: "update-downloaded", version: info.version });
+  });
+  autoUpdater.on("error", (error) => {
+    updateCheckInFlight = false;
+    updateDownloadInFlight = false;
+    console.warn("Hikanest update check failed:", error instanceof Error ? error.message : error);
+    sendUpdateState({
+      state: "error",
+      message: error instanceof Error ? error.message : "Update service unavailable.",
+    });
+  });
+}
+
+async function checkForUpdates() {
+  if (isDev || updateCheckInFlight || updateDownloadInFlight) return false;
+  updateCheckInFlight = true;
+  try {
+    await autoUpdater.checkForUpdates();
+    return true;
+  } catch (error) {
+    updateCheckInFlight = false;
+    console.warn("Hikanest update check failed:", error instanceof Error ? error.message : error);
+    sendUpdateState({ state: "error", message: "Update service unavailable." });
+    return false;
+  }
+}
+
+async function downloadUpdate() {
+  if (isDev || updateDownloadInFlight) return false;
+  updateDownloadInFlight = true;
+  sendUpdateState({ state: "downloading", percent: 0 });
+  try {
+    await autoUpdater.downloadUpdate();
+    return true;
+  } catch (error) {
+    updateDownloadInFlight = false;
+    console.warn("Hikanest update download failed:", error instanceof Error ? error.message : error);
+    sendUpdateState({ state: "error", message: "Unable to download the update. Please try again later." });
+    return false;
+  }
+}
+
+function installUpdate() {
+  if (isDev || updateSessionActive) return { ok: false, reason: "active-session" };
+  autoUpdater.quitAndInstall(false, true);
+  return { ok: true };
+}
 
 function receiveDesktopAuthUrl(value: string) {
   try {
@@ -263,6 +362,13 @@ ipcMain.handle("is-development", () => isDev);
 
 ipcMain.handle("get-app-version", () => app.getVersion());
 
+ipcMain.handle("check-for-updates", () => checkForUpdates());
+ipcMain.handle("download-update", () => downloadUpdate());
+ipcMain.handle("install-update", () => installUpdate());
+ipcMain.on("set-update-session-active", (_event, active: boolean) => {
+  updateSessionActive = Boolean(active);
+});
+
 ipcMain.handle("open-external", async (_event, url: string) => {
   if (!/^https:\/\//i.test(url)) return false;
   await shell.openExternal(url);
@@ -330,11 +436,17 @@ ipcMain.on("overlay-close", () => app.quit());
 
 // ── App lifecycle ─────────────────────────────────────────────────────────────
 app.whenReady().then(() => {
+  configureAutoUpdater();
   app.setAsDefaultProtocolClient("hikanest");
   const authUrl = process.argv.find((value) => value.startsWith("hikanest://"));
   if (authUrl) receiveDesktopAuthUrl(authUrl);
   createOverlay();
   createTray();
+
+  if (!isDev) {
+    setTimeout(() => { void checkForUpdates(); }, 5000);
+    updateCheckTimer = setInterval(() => { void checkForUpdates(); }, 6 * 60 * 60 * 1000);
+  }
 
   app.on("activate", () => {
     if (!overlayWindow) createOverlay();
@@ -351,4 +463,5 @@ app.on("activate", () => {
 
 app.on("quit", () => {
   if (detectionInterval) clearInterval(detectionInterval);
+  if (updateCheckTimer) clearInterval(updateCheckTimer);
 });

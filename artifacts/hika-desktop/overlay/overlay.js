@@ -59,6 +59,7 @@ let autoAnswerEnabled = true;
 let saveTranscriptEnabled = true;
 let screenBeforeMinimize = "start";
 let availableUpdateUrl = "";
+let latestUpdateState = null;
 
 function markRealtimeMetric(name) {
   const now = performance.now();
@@ -138,6 +139,14 @@ const checkUpdateBtn = $("check-update-btn");
 const downloadUpdateBtn = $("download-update-btn");
 const updateStatus = $("update-status");
 const privateOverlay = $("private-overlay");
+const updateNotification = $("update-notification");
+const updateNotificationTitle = $("update-notification-title");
+const updateNotificationMessage = $("update-notification-message");
+const updateProgressWrap = $("update-progress-wrap");
+const updateProgressFill = $("update-progress-fill");
+const updateProgressLabel = $("update-progress-label");
+const updateLaterBtn = $("update-later-btn");
+const updateNowBtn = $("update-now-btn");
 
 // ── Init ──────────────────────────────────────────────────────────────────────
 async function init() {
@@ -193,8 +202,7 @@ async function init() {
   });
   checkUpdateBtn?.addEventListener("click", checkForUpdates);
   downloadUpdateBtn?.addEventListener("click", () => {
-    if (availableUpdateUrl) window.hikaElectron?.openExternal(availableUpdateUrl);
-    closeAccountMenu();
+    void startUpdateDownload();
   });
   $("open-dashboard-btn")?.addEventListener("click", () => {
     closeAccountMenu();
@@ -206,6 +214,11 @@ async function init() {
     await clearAuthToken();
     showSetupScreen();
   });
+  updateLaterBtn?.addEventListener("click", () => {
+    updateNotification.hidden = true;
+  });
+  updateNowBtn?.addEventListener("click", () => { void handleUpdateAction(); });
+  window.hikaElectron?.onUpdateState(renderUpdateState);
   privateOverlay?.addEventListener("change", () => {
     if (!privateOverlay.checked) showToast("Screen-share protection remains enabled for safety.");
     privateOverlay.checked = true;
@@ -385,25 +398,86 @@ function compareVersions(left, right) {
   return 0;
 }
 
+function renderUpdateState(payload) {
+  latestUpdateState = payload;
+  const currentVersion = payload.currentVersion || "current version";
+  const nextVersion = payload.version || "the latest version";
+
+  if (payload.state === "checking") {
+    updateStatus.textContent = "Checking for updates...";
+    return;
+  }
+
+  if (payload.state === "up-to-date") {
+    updateStatus.textContent = `HikaNest ${currentVersion} is up to date.`;
+    downloadUpdateBtn.hidden = true;
+    updateNotification.hidden = true;
+    return;
+  }
+
+  if (payload.state === "error") {
+    updateStatus.textContent = payload.message || "Could not check for updates.";
+    updateNotification.hidden = true;
+    return;
+  }
+
+  updateNotification.hidden = false;
+  if (payload.state === "update-available") {
+    updateNotificationTitle.textContent = "New update available";
+    updateNotificationMessage.textContent = `HikaNest ${nextVersion} is available. You are currently using ${currentVersion}.`;
+    updateProgressWrap.hidden = true;
+    updateNowBtn.textContent = "Update Now";
+    updateNowBtn.disabled = false;
+    updateLaterBtn.hidden = false;
+    downloadUpdateBtn.hidden = false;
+    updateStatus.textContent = `Version ${nextVersion} is available.`;
+  } else if (payload.state === "downloading") {
+    const percent = Math.round(payload.percent ?? 0);
+    updateNotificationTitle.textContent = "Downloading HikaNest update...";
+    updateNotificationMessage.textContent = `HikaNest ${nextVersion} is downloading. You can keep using the app.`;
+    updateProgressWrap.hidden = false;
+    updateProgressFill.style.width = `${percent}%`;
+    updateProgressLabel.textContent = `${percent}%`;
+    updateNowBtn.disabled = true;
+    updateLaterBtn.hidden = true;
+    updateStatus.textContent = `Downloading update... ${percent}%`;
+  } else if (payload.state === "update-downloaded") {
+    updateNotificationTitle.textContent = "Update ready";
+    updateNotificationMessage.textContent = sessionId
+      ? `Update downloaded. Restart HikaNest when you're ready to finish your session.`
+      : `HikaNest ${nextVersion} is ready to install.`;
+    updateProgressWrap.hidden = true;
+    updateNowBtn.textContent = "Restart & Update";
+    updateNowBtn.disabled = false;
+    updateLaterBtn.hidden = false;
+    downloadUpdateBtn.hidden = true;
+    updateStatus.textContent = sessionId ? "Update ready after this session." : "Update ready to install.";
+  }
+}
+
 async function checkForUpdates() {
-  if (!updateStatus) return;
-  updateStatus.textContent = "Checking...";
-  downloadUpdateBtn.hidden = true;
-  availableUpdateUrl = "";
-  try {
-    const currentVersion = await window.hikaElectron?.getAppVersion?.() || "0.0.0";
-    const response = await fetch(`${apiUrl}/api/desktop/update`);
-    if (!response.ok) throw new Error("Update service unavailable");
-    const release = await response.json();
-    if (release?.downloadUrl && /^https:\/\//i.test(release.downloadUrl) && compareVersions(release.version, currentVersion) > 0) {
-      availableUpdateUrl = release.downloadUrl;
-      updateStatus.textContent = `Version ${release.version} is ready.`;
-      downloadUpdateBtn.hidden = false;
-    } else {
-      updateStatus.textContent = "You are up to date.";
-    }
-  } catch {
-    updateStatus.textContent = "Could not check for updates.";
+  closeAccountMenu();
+  if (!window.hikaElectron?.checkForUpdates) return;
+  await window.hikaElectron.checkForUpdates();
+}
+
+async function startUpdateDownload() {
+  closeAccountMenu();
+  if (latestUpdateState?.state !== "update-available" || !window.hikaElectron?.downloadUpdate) return;
+  await window.hikaElectron.downloadUpdate();
+}
+
+async function handleUpdateAction() {
+  if (latestUpdateState?.state === "update-available") {
+    await startUpdateDownload();
+    return;
+  }
+  if (latestUpdateState?.state !== "update-downloaded" || !window.hikaElectron?.installUpdate) return;
+  const result = await window.hikaElectron.installUpdate();
+  if (!result.ok) {
+    updateNotification.hidden = false;
+    updateNotificationMessage.textContent = "Update downloaded. Restart HikaNest when you're ready.";
+    showToast("Finish your active session before restarting.");
   }
 }
 
@@ -513,6 +587,7 @@ async function handleStart() {
     const res = await api("POST", "/api/sessions", { title, platform: "teams", status: "active" });
     sessionId    = res.id;
     sessionStart = Date.now();
+    window.hikaElectron?.setUpdateSessionActive(true);
 
     hdrTitle.textContent            = title;
     startScreen.style.display       = "none";
@@ -540,6 +615,7 @@ async function handleEnd() {
   if (!sessionId) return;
   if (isRecording) await stopRecording();
   try { await api("PATCH", `/api/sessions/${sessionId}`, { status: "ended" }); } catch {}
+  window.hikaElectron?.setUpdateSessionActive(false);
   sessionId    = null;
   clearInterval(timerHandle);
   timerHandle  = null;
@@ -559,6 +635,7 @@ async function handleEnd() {
   if (setupMeetingNameEl) setupMeetingNameEl.value = "";
   startBtn.disabled    = false;
   startBtn.textContent = "Start Session";
+  if (latestUpdateState?.state === "update-downloaded") renderUpdateState(latestUpdateState);
 }
 
 // ── Timer ─────────────────────────────────────────────────────────────────────

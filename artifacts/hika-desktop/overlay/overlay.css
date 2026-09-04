@@ -79,6 +79,23 @@ body {
 .menu-toggle { display: flex; align-items: center; justify-content: space-between; margin: 4px 0; padding: 9px 10px; color: #dce5fa; font-size: 12px; }.menu-toggle input { display: none; }.menu-toggle span { width: 28px; height: 16px; border-radius: 20px; background: #46506a; }.menu-toggle span::after { content: ""; display: block; width: 12px; height: 12px; margin: 2px; border-radius: 50%; background: white; transition: transform .2s; }.menu-toggle input:checked + span { background: var(--primary); }.menu-toggle input:checked + span::after { transform: translateX(12px); }
 .update-status { min-height: 14px; padding: 4px 10px; color: var(--muted); font-size: 10px; }
 
+.update-notification {
+  position: absolute; top: 48px; right: 12px; z-index: 35; width: 274px;
+  padding: 12px; border: 1px solid rgba(109,125,255,.42); border-radius: 12px;
+  background: #11162a; box-shadow: 0 18px 45px rgba(0,0,0,.55);
+}
+.update-notification-title { display: flex; align-items: center; gap: 7px; color: #eaf0ff; font-size: 12px; }
+.update-notification-title span { color: var(--primary2); font-size: 16px; }
+.update-notification p { margin-top: 7px; color: var(--muted); font-size: 11px; line-height: 1.45; }
+.update-progress-wrap { display: flex; align-items: center; gap: 7px; margin-top: 9px; }
+.update-progress-track { flex: 1; height: 5px; overflow: hidden; border-radius: 4px; background: rgba(255,255,255,.1); }
+.update-progress-fill { width: 0; height: 100%; border-radius: inherit; background: var(--primary); transition: width .2s ease; }
+.update-progress-wrap span { min-width: 29px; color: var(--muted); font-size: 10px; text-align: right; }
+.update-notification-actions { display: flex; justify-content: flex-end; gap: 6px; margin-top: 11px; }
+.update-notification-actions button { padding: 5px 9px; border: 1px solid rgba(255,255,255,.14); border-radius: 7px; background: rgba(255,255,255,.06); color: var(--muted); font-size: 10px; cursor: pointer; }
+.update-notification-actions button:last-child { border-color: rgba(109,125,255,.45); background: rgba(109,125,255,.18); color: #e8edff; }
+.update-notification-actions button:disabled { cursor: default; opacity: .55; }
+
 .wnd-btn {
   width: 26px;
   height: 26px;

@@ -29,6 +29,19 @@
     </div>
   </div>
 
+  <section id="update-notification" class="update-notification" hidden aria-live="polite">
+    <div class="update-notification-title"><span>↻</span><strong id="update-notification-title">New update available</strong></div>
+    <p id="update-notification-message"></p>
+    <div id="update-progress-wrap" class="update-progress-wrap" hidden>
+      <div class="update-progress-track"><div id="update-progress-fill" class="update-progress-fill"></div></div>
+      <span id="update-progress-label">0%</span>
+    </div>
+    <div class="update-notification-actions">
+      <button id="update-later-btn" type="button">Later</button>
+      <button id="update-now-btn" type="button">Update Now</button>
+    </div>
+  </section>
+
   <button id="minimized-launcher" class="minimized-launcher" type="button" title="Open Hikanest" aria-label="Open Hikanest">
     <img src="icon.png" alt="" />
   </button>

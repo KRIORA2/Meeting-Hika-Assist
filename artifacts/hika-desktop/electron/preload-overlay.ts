@@ -1,5 +1,13 @@
 import { contextBridge, ipcRenderer } from "electron";
 
+type UpdateStatePayload = {
+  state: "checking" | "update-available" | "downloading" | "update-downloaded" | "up-to-date" | "error";
+  currentVersion: string;
+  version?: string;
+  percent?: number;
+  message?: string;
+};
+
 contextBridge.exposeInMainWorld("hikaElectron", {
   getApiUrl: (): Promise<string> =>
     ipcRenderer.invoke("get-api-url"),
@@ -12,6 +20,23 @@ contextBridge.exposeInMainWorld("hikaElectron", {
 
   getAppVersion: (): Promise<string> =>
     ipcRenderer.invoke("get-app-version"),
+
+  checkForUpdates: (): Promise<boolean> =>
+    ipcRenderer.invoke("check-for-updates"),
+
+  downloadUpdate: (): Promise<boolean> =>
+    ipcRenderer.invoke("download-update"),
+
+  installUpdate: (): Promise<{ ok: boolean; reason?: string }> =>
+    ipcRenderer.invoke("install-update"),
+
+  setUpdateSessionActive: (active: boolean): void => {
+    ipcRenderer.send("set-update-session-active", active);
+  },
+
+  onUpdateState: (cb: (payload: UpdateStatePayload) => void): void => {
+    ipcRenderer.on("update-state", (_event, payload: UpdateStatePayload) => cb(payload));
+  },
 
   openExternal: (url: string): Promise<boolean> =>
     ipcRenderer.invoke("open-external", url),
@@ -60,6 +85,11 @@ declare global {
       getGoogleClientId: () => Promise<string>;
       isDevelopment: () => Promise<boolean>;
       getAppVersion: () => Promise<string>;
+      checkForUpdates: () => Promise<boolean>;
+      downloadUpdate: () => Promise<boolean>;
+      installUpdate: () => Promise<{ ok: boolean; reason?: string }>;
+      setUpdateSessionActive: (active: boolean) => void;
+      onUpdateState: (cb: (payload: UpdateStatePayload) => void) => void;
       openExternal: (url: string) => Promise<boolean>;
       setClickThrough: (enabled: boolean) => Promise<void>;
       setSize: (width: number, height: number) => Promise<void>;

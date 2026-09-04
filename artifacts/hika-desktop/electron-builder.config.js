@@ -1,4 +1,7 @@
 /** @type {import('electron-builder').Configuration} */
+const packageVersion = require("./package.json").version;
+const isPrerelease = packageVersion.includes("-");
+
 module.exports = {
   appId: "ai.hika.desktop",
   productName: "Hikanest",
@@ -23,6 +26,13 @@ module.exports = {
     target: [{ target: "nsis", arch: ["x64"] }],
     icon: "icon.ico",
     artifactName: "Hikanest-Setup.${ext}",
+  },
+
+  publish: {
+    provider: "github",
+    owner: "A2Forge",
+    repo: "hika-assist",
+    releaseType: isPrerelease ? "prerelease" : "release",
   },
 
   mac: {
