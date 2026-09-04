@@ -14,7 +14,6 @@ module.exports = {
 
   files: [
     "dist/electron/**/*",
-    "!node_modules",
   ],
 
   extraResources: [
