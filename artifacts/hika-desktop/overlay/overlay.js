@@ -14,6 +14,7 @@ let mediaRecorder   = null;
 let audioChunks     = [];
 let mimeType        = "audio/webm;codecs=opus";
 let latestUtterance = "";
+let transcriptReadyForAsk = false;
 let transcriptChunks = [];
 let insights        = [];
 let isAnalyzing     = false;
@@ -98,6 +99,7 @@ const recIndicator   = $("rec-indicator");
 const txScroll       = $("tx-scroll");
 const liveTxEl       = $("live-tx");
 const liveTxText     = $("live-tx-text");
+const liveTxLabel    = $("live-tx-label");
 const aiScroll       = $("ai-scroll");
 const historyStrip   = $("history-strip");
 const historyList    = $("history-list");
@@ -622,6 +624,7 @@ async function handleEnd() {
   transcriptChunks = [];
   insights     = [];
   latestUtterance  = "";
+  transcriptReadyForAsk = false;
 
   txScroll.innerHTML    = emptyHint("🎤", "Tap Record to start");
   aiScroll.innerHTML    = emptyHint("⚡", "AI answers appear here");
@@ -675,7 +678,9 @@ async function startRecording() {
       statusDot.textContent = "● REC";
       statusDot.className = "status-dot rec";
       liveTxEl.style.display = "flex";
-      liveTxText.textContent = "";
+      liveTxText.value = "";
+      liveTxLabel.textContent = "● LIVE";
+      transcriptReadyForAsk = false;
       return;
     }
 
@@ -692,12 +697,10 @@ async function startRecording() {
       if (text) {
         latestUtterance = text;
         addTranscriptChunk(text);
-        liveTxText.textContent = text;
+        liveTxText.value = text;
         liveTxEl.style.display = "flex";
-        if (autoAnswerEnabled && text.trim().length > 12) {
-          lastAnalyzedText = text;
-          analyze(text);
-        }
+        liveTxLabel.textContent = "● EDITABLE";
+        transcriptReadyForAsk = true;
       }
     };
 
@@ -713,7 +716,7 @@ async function startRecording() {
       if (!text) return;
 
       latestUtterance = text;
-      liveTxText.textContent = text;
+      liveTxText.value = text;
       liveTxEl.style.display = "flex";
 
     }, 2500);
@@ -727,7 +730,8 @@ async function startRecording() {
     statusDot.textContent      = "● REC";
     statusDot.className        = "status-dot rec";
     liveTxEl.style.display     = "flex";
-    liveTxText.textContent     = "";
+    liveTxText.value           = "";
+    transcriptReadyForAsk = false;
 
   } catch (err) {
     const message = err instanceof Error ? err.message : "Microphone access failed.";
@@ -751,17 +755,13 @@ async function stopRecording() {
   statusDot.className        = "status-dot";
 
   if (realtimePeer?.connectionState === "connected" && realtimeEvents?.readyState === "open") {
-    statusDot.textContent = "● Preparing answer";
+    statusDot.textContent = "● Finalizing transcript";
     realtimeStopRequested = true;
     realtimeResponseRequested = false;
     mediaRecorder?.stream.getTracks().forEach(t => t.stop());
     stopAudioPipeline();
     if (realtimeEvents?.readyState === "open") {
       realtimeEvents.send(JSON.stringify({ type: "input_audio_buffer.commit" }));
-      if (realtimeTranscriptFinalized && latestUtterance.trim()) {
-        realtimeResponseRequested = true;
-        realtimeEvents.send(JSON.stringify({ type: "response.create" }));
-      }
     }
     return;
   }
@@ -842,21 +842,20 @@ async function startRealtimeVoice(stream, reconnect = false) {
       if (payload.delta) markRealtimeMetric("first_transcript_delta");
       realtimePartialTranscript += payload.delta || "";
       realtimeTranscriptFinalized = false;
-      liveTxText.textContent = realtimePartialTranscript;
+      liveTxText.value = realtimePartialTranscript;
     } else if (payload.type === "conversation.item.input_audio_transcription.completed") {
       const text = (payload.transcript || realtimePartialTranscript || "").trim();
       if (text) {
         latestUtterance = text;
         addTranscriptChunk(text);
-        liveTxText.textContent = text;
-        if (realtimeStopRequested && !realtimeResponseRequested) {
-          realtimeResponseRequested = true;
-          if (events.readyState === "open") events.send(JSON.stringify({ type: "response.create" }));
-        }
+        liveTxText.value = text;
+        liveTxLabel.textContent = "● EDITABLE";
       }
       realtimePartialTranscript = text;
       realtimeTranscriptFinalized = Boolean(text);
+      if (text) transcriptReadyForAsk = true;
       markRealtimeMetric("transcript_completed");
+      if (realtimeStopRequested) stopRealtimeVoice();
     } else if (payload.type === "response.created") {
       markRealtimeMetric("response_created");
       realtimeResponseId = payload.response?.id || payload.response_id || null;
@@ -1171,9 +1170,15 @@ async function analyze(utterance) {
 }
 
 async function handleManualAsk() {
-  const q = askInput.value.trim();
+  if (isRecording) {
+    showToast("Stop the microphone before asking.");
+    return;
+  }
+  const typedQuestion = askInput.value.trim();
+  const q = typedQuestion || (transcriptReadyForAsk ? liveTxText.value.trim() : "");
   if (!q || isAnalyzing) return;
-  askInput.value    = "";
+  latestUtterance = q;
+  askInput.value = "";
   askBtn.disabled   = true;
   await analyze(q);
   askBtn.disabled   = false;
