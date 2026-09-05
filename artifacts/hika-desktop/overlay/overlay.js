@@ -14,6 +14,7 @@ let mediaRecorder   = null;
 let audioChunks     = [];
 let mimeType        = "audio/webm;codecs=opus";
 let latestUtterance = "";
+let micTranscriptText = "";
 let transcriptReadyForAsk = false;
 let transcriptChunks = [];
 let insights        = [];
@@ -624,6 +625,7 @@ async function handleEnd() {
   transcriptChunks = [];
   insights     = [];
   latestUtterance  = "";
+  micTranscriptText = "";
   transcriptReadyForAsk = false;
 
   txScroll.innerHTML    = emptyHint("🎤", "Tap Record to start");
@@ -674,11 +676,13 @@ async function startRecording() {
       micBtn.classList.add("recording");
       micBtn.textContent = "⏹";
       micBtn.title = "Stop recording";
+      askInput.classList.add("recording");
       recIndicator.style.display = "inline";
       statusDot.textContent = "● REC";
       statusDot.className = "status-dot rec";
       liveTxEl.style.display = "flex";
-      liveTxText.value = "";
+      askInput.value = "";
+      micTranscriptText = "";
       liveTxLabel.textContent = "● LIVE";
       transcriptReadyForAsk = false;
       return;
@@ -696,8 +700,9 @@ async function startRecording() {
       const text = await transcribeBlob(blob);
       if (text) {
         latestUtterance = text;
+        micTranscriptText = text;
         addTranscriptChunk(text);
-        liveTxText.value = text;
+        askInput.value = text;
         liveTxEl.style.display = "flex";
         liveTxLabel.textContent = "● EDITABLE";
         transcriptReadyForAsk = true;
@@ -716,7 +721,8 @@ async function startRecording() {
       if (!text) return;
 
       latestUtterance = text;
-      liveTxText.value = text;
+      micTranscriptText = text;
+      askInput.value = text;
       liveTxEl.style.display = "flex";
 
     }, 2500);
@@ -726,11 +732,13 @@ async function startRecording() {
     micBtn.classList.add("recording");
     micBtn.textContent        = "⏹";
     micBtn.title              = "Stop recording";
+    askInput.classList.add("recording");
     recIndicator.style.display = "inline";
     statusDot.textContent      = "● REC";
     statusDot.className        = "status-dot rec";
     liveTxEl.style.display     = "flex";
-    liveTxText.value           = "";
+    askInput.value             = "";
+    micTranscriptText = "";
     transcriptReadyForAsk = false;
 
   } catch (err) {
@@ -748,6 +756,7 @@ async function stopRecording() {
   clearInterval(chunkTimer);
   isRecording = false;
   micBtn.classList.remove("recording");
+  askInput.classList.remove("recording");
   micBtn.textContent         = "🎤";
   micBtn.title               = "Record";
   recIndicator.style.display = "none";
@@ -828,6 +837,7 @@ async function startRealtimeVoice(stream, reconnect = false) {
     try { payload = JSON.parse(event.data); } catch { return; }
     if (payload.type === "input_audio_buffer.speech_started") {
       markRealtimeMetric("speech_started");
+      realtimePartialTranscript = "";
       if (realtimeResponseId) cancelledRealtimeResponseIds.add(realtimeResponseId);
       if (cancelledRealtimeResponseIds.size > 64) cancelledRealtimeResponseIds.clear();
       if (realtimeResponseId && events.readyState === "open") events.send(JSON.stringify({ type: "response.cancel", response_id: realtimeResponseId }));
@@ -842,13 +852,16 @@ async function startRealtimeVoice(stream, reconnect = false) {
       if (payload.delta) markRealtimeMetric("first_transcript_delta");
       realtimePartialTranscript += payload.delta || "";
       realtimeTranscriptFinalized = false;
-      liveTxText.value = realtimePartialTranscript;
+      askInput.value = [micTranscriptText, realtimePartialTranscript].filter(Boolean).join(" ");
     } else if (payload.type === "conversation.item.input_audio_transcription.completed") {
       const text = (payload.transcript || realtimePartialTranscript || "").trim();
       if (text) {
         latestUtterance = text;
+        micTranscriptText = micTranscriptText
+          ? `${micTranscriptText} ${text}`.replace(/\s+/g, " ").trim()
+          : text;
         addTranscriptChunk(text);
-        liveTxText.value = text;
+        askInput.value = micTranscriptText;
         liveTxLabel.textContent = "● EDITABLE";
       }
       realtimePartialTranscript = text;
@@ -1175,10 +1188,12 @@ async function handleManualAsk() {
     return;
   }
   const typedQuestion = askInput.value.trim();
-  const q = typedQuestion || (transcriptReadyForAsk ? liveTxText.value.trim() : "");
+  const q = typedQuestion || (transcriptReadyForAsk ? askInput.value.trim() : "");
   if (!q || isAnalyzing) return;
   latestUtterance = q;
   askInput.value = "";
+  if (!transcriptReadyForAsk) addTranscriptChunk(q);
+  transcriptReadyForAsk = false;
   askBtn.disabled   = true;
   await analyze(q);
   askBtn.disabled   = false;
