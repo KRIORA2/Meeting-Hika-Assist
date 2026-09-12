@@ -112,14 +112,16 @@ export default function Settings() {
     message?: string;
   }>({ state: "idle" });
 
+  const hikaElectron = typeof window !== "undefined" ? window.hikaElectron : undefined;
+
   useEffect(() => {
-    if (typeof window !== "undefined" && window.hikaElectron) {
-      window.hikaElectron.getAppVersion().then(v => setUpdateState(s => ({ ...s, currentVersion: v })));
-      window.hikaElectron.onUpdateState((payload) => {
+    if (typeof window !== "undefined" && hikaElectron) {
+      hikaElectron.getAppVersion().then(v => setUpdateState(s => ({ ...s, currentVersion: v })));
+      hikaElectron.onUpdateState((payload) => {
         setUpdateState(payload);
       });
     }
-  }, []);
+  }, [hikaElectron]);
 
   return (
     <div className="h-full overflow-y-auto">
@@ -253,7 +255,7 @@ export default function Settings() {
             </Row>
           </Section>
 
-          {typeof window !== "undefined" && window.hikaElectron && (
+          {hikaElectron && (
             <Section title="Updates & About" icon={Monitor}>
               <Row label="App Version" description="Current installed version">
                 <div className="flex flex-col items-end gap-2">
@@ -263,17 +265,37 @@ export default function Settings() {
                   
                   {updateState.state === "checking" && <span className="text-xs text-muted-foreground">Checking for updates...</span>}
                   {updateState.state === "up-to-date" && <span className="text-xs text-emerald-400">You're up to date!</span>}
+                  {updateState.state === "update-available" && (
+                    <div className="flex flex-col items-end gap-1.5">
+                      <span className="text-xs text-amber-400">v{updateState.version} available!</span>
+                      <button
+                        onClick={() => hikaElectron.downloadUpdate()}
+                        className="text-xs bg-sky-500/20 text-sky-400 border border-sky-500/30 px-3 py-1.5 rounded hover:bg-sky-500/30 transition-colors"
+                      >
+                        Download Update
+                      </button>
+                    </div>
+                  )}
                   {updateState.state === "downloading" && (
-                    <span className="text-xs text-sky-400">Downloading... {Math.round(updateState.percent || 0)}%</span>
+                    <div className="flex flex-col items-end gap-1">
+                      <span className="text-xs text-sky-400">Downloading v{updateState.version}...</span>
+                      <div className="w-32 h-1.5 bg-white/10 rounded-full overflow-hidden">
+                        <div
+                          className="h-full bg-sky-500 rounded-full transition-all duration-300"
+                          style={{ width: `${Math.round(updateState.percent || 0)}%` }}
+                        />
+                      </div>
+                      <span className="text-[10px] text-muted-foreground">{Math.round(updateState.percent || 0)}%</span>
+                    </div>
                   )}
                   {updateState.state === "error" && (
                     <span className="text-xs text-red-400">{updateState.message || "Update error"}</span>
                   )}
 
-                  {updateState.state !== "checking" && updateState.state !== "downloading" && updateState.state !== "update-downloaded" && (
+                  {(updateState.state === "idle" || updateState.state === "up-to-date" || updateState.state === "error") && (
                     <button
                       onClick={() => {
-                        window.hikaElectron.checkForUpdates().then((started) => {
+                        hikaElectron.checkForUpdates().then((started) => {
                           if (!started) alert("Could not check for updates right now.");
                         });
                       }}
@@ -284,12 +306,15 @@ export default function Settings() {
                   )}
 
                   {updateState.state === "update-downloaded" && (
-                    <button
-                      onClick={() => window.hikaElectron.installUpdate()}
-                      className="text-xs bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 px-3 py-1.5 rounded hover:bg-emerald-500/30 transition-colors shadow-[0_0_15px_rgba(16,185,129,0.3)] animate-pulse"
-                    >
-                      Install Update & Restart
-                    </button>
+                    <div className="flex flex-col items-end gap-1.5">
+                      <span className="text-xs text-emerald-400">v{updateState.version} ready to install!</span>
+                      <button
+                        onClick={() => hikaElectron.installUpdate()}
+                        className="text-xs bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 px-3 py-1.5 rounded hover:bg-emerald-500/30 transition-colors shadow-[0_0_15px_rgba(16,185,129,0.3)] animate-pulse"
+                      >
+                        Install Update & Restart
+                      </button>
+                    </div>
                   )}
                 </div>
               </Row>

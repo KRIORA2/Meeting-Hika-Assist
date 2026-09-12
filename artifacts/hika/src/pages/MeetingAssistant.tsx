@@ -28,6 +28,13 @@ declare global {
     documentPictureInPicture?: {
       requestWindow(opts?: { width?: number; height?: number }): Promise<Window>;
     };
+    hikaElectron?: {
+      getAppVersion: () => Promise<string>;
+      onUpdateState: (callback: (payload: any) => void) => void;
+      downloadUpdate: () => void;
+      checkForUpdates: () => Promise<boolean>;
+      installUpdate: () => void;
+    };
   }
 }
 
@@ -339,46 +346,62 @@ function PiPContent({
 
         <div style={S.aiPane}>
           <div style={S.scroll}>
-            {isAnalyzing && (
-              <div style={{ padding: "8px 12px", borderRadius: 10, background: "rgba(99,102,241,0.08)", border: "1px solid rgba(99,102,241,0.15)", fontSize: 11, color: "#a5b4fc" }}>
-                ⚡ Listening...
-              </div>
-            )}
+            {(() => {
+              const latest = insights[0];
+              const latestQuestion = liveTranscript ?? chunks[chunks.length - 1]?.text ?? latest?.question ?? "";
+              const hasQuestion = Boolean(latestQuestion) || micActive || isTranscribing;
 
-            {insights.length === 0 ? (
-              <div style={S.empty}>
-                <Zap size={18} style={{ opacity: 0.2 }} />
-                <span>Waiting for conversation...</span>
-              </div>
-            ) : (
-              (() => {
-                const latest = insights[0];
-                return (
-                  <div style={{ display: "flex", flexDirection: "column", height: "100%", padding: 16, gap: 18 }}>
-                    <div>
-                      <div style={{ color: "#818cf8", fontSize: 11, fontWeight: 700, marginBottom: 8 }}>LIVE CONVERSATION</div>
-                      <div style={{ color: "#d1d5db", fontSize: 14, lineHeight: 1.7, whiteSpace: "pre-wrap" }}>
-                        {liveTranscript || latest.question}
+              return (
+                <div style={{ display: "flex", flexDirection: "column", gap: 14, minHeight: "100%", padding: 12 }}>
+                  {hasQuestion && (
+                    <div style={{ background: "rgba(15,23,42,0.9)", border: "1px solid rgba(148,163,184,0.15)", borderRadius: 16, padding: 14 }}>
+                      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
+                        <span style={{ fontSize: 9, fontWeight: 700, letterSpacing: "0.14em", color: "#7dd3fc", textTransform: "uppercase" }}>Question</span>
+                        <span style={{ fontSize: 9, color: "#94a3b8" }}>
+                          {micActive ? "Listening…" : isTranscribing ? "Processing…" : "Transcript"}
+                        </span>
+                      </div>
+                      <div style={{ color: "#e2e8f0", fontSize: 14, lineHeight: 1.7, whiteSpace: "pre-wrap" }}>
+                        {latestQuestion || "Listening for the next question…"}
                       </div>
                     </div>
+                  )}
 
-                    <div style={{ flex: 1, background: "rgba(99,102,241,.08)", border: "1px solid rgba(99,102,241,.18)", borderRadius: 14, padding: 18 }}>
-                      <div style={{ color: "#60a5fa", fontWeight: 700, marginBottom: 12 }}>AI RESPONSE</div>
-                      <div style={{ color: "white", fontSize: 15, lineHeight: 1.8, whiteSpace: "pre-wrap" }}>
+                  {isAnalyzing && (
+                    <div style={{ padding: "10px 12px", borderRadius: 12, background: "rgba(99,102,241,0.08)", border: "1px solid rgba(99,102,241,0.15)", fontSize: 11, color: "#a5b4fc" }}>
+                      ⚡ Preparing an answer...
+                    </div>
+                  )}
+
+                  {!isAnalyzing && latest && (
+                    <div style={{ background: "rgba(16,185,129,0.08)", border: "1px solid rgba(16,185,129,0.16)", borderRadius: 16, padding: 14 }}>
+                      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
+                        <span style={{ fontSize: 9, fontWeight: 700, letterSpacing: "0.14em", color: "#34d399", textTransform: "uppercase" }}>Answer</span>
+                        <span style={{ fontSize: 9, color: "#86efac", background: "rgba(16,185,129,0.14)", padding: "2px 6px", borderRadius: 999, border: "1px solid rgba(16,185,129,0.14)" }}>
+                          {latest.confidence} confidence
+                        </span>
+                      </div>
+                      <div style={{ color: "#f8fafc", fontSize: 14, lineHeight: 1.8, whiteSpace: "pre-wrap" }}>
                         {latest.answer}
                       </div>
+                      {latest.suggestions.length > 0 && (
+                        <div style={{ marginTop: 12, background: "rgba(15,23,42,0.7)", border: "1px solid rgba(148,163,184,0.12)", borderRadius: 12, padding: 10 }}>
+                          <div style={{ fontSize: 9, fontWeight: 700, letterSpacing: "0.12em", color: "#cbd5e1", textTransform: "uppercase", marginBottom: 6 }}>Suggested reply</div>
+                          <div style={{ color: "#dbeafe", fontSize: 12, lineHeight: 1.6 }}>{latest.suggestions[0]}</div>
+                        </div>
+                      )}
                     </div>
+                  )}
 
-                    {latest.suggestions.length > 0 && (
-                      <div style={{ background: "rgba(16,185,129,.08)", border: "1px solid rgba(16,185,129,.15)", borderRadius: 12, padding: 12 }}>
-                        <div style={{ color: "#34d399", fontWeight: 700, marginBottom: 6 }}>Suggested Reply</div>
-                        <div style={{ color: "#e5e7eb", lineHeight: 1.6 }}>{latest.suggestions[0]}</div>
-                      </div>
-                    )}
-                  </div>
-                );
-              })()
-            )}
+                  {!hasQuestion && !latest && !isAnalyzing && (
+                    <div style={S.empty}>
+                      <Zap size={18} style={{ opacity: 0.2 }} />
+                      <span>Waiting for conversation...</span>
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
           </div>
         </div>
       </div>
@@ -1395,6 +1418,7 @@ function PiPContent({
     const systemTrack = await getSystemAudioTrack();
 
     const context = new AudioContext({ sampleRate: 48000 });
+    await context.resume();
     const destination = context.createMediaStreamDestination();
 
     const micSource = context.createMediaStreamSource(new MediaStream([micTrack]));
@@ -1431,7 +1455,11 @@ function PiPContent({
     if (micActiveRef.current) return;
     setMicError(null);
     try {
+      const fallbackMicStream = await getOrCreateMicStream();
       const stream = await buildRecordingStream();
+      if (!stream || stream.getAudioTracks().length === 0) {
+        throw new Error("No microphone audio stream available");
+      }
       const mimeType = MediaRecorder.isTypeSupported("audio/webm;codecs=opus") ? "audio/webm;codecs=opus"
         : MediaRecorder.isTypeSupported("audio/webm") ? "audio/webm"
           : "audio/ogg;codecs=opus";
@@ -1452,7 +1480,7 @@ function PiPContent({
       realtimeFallbackRef.current = true;
       setVoiceStatus("fallback");
 
-      const recorder = new MediaRecorder(stream, { mimeType });
+      const recorder = new MediaRecorder(fallbackMicStream, { mimeType });
       recorderRef.current = recorder;
 
       recorder.ondataavailable = (e) => {
@@ -1863,51 +1891,13 @@ function PiPContent({
         )}
       </AnimatePresence>
 
-      {/* Two-panel split */}
+      {/* Main conversation panel */}
       <div className="flex-1 flex min-h-0 overflow-hidden">
-
-        {/* LEFT: Live transcript */}
-        <div className="w-[42%] max-w-[620px] min-w-[320px] border-r border-white/10 flex flex-col overflow-hidden">
-          <div className="flex items-center justify-between px-4 py-3 border-b border-white/10 bg-white/[0.02]">
-            <div className="flex items-center gap-2">
-              <Radio size={12} className="text-cyan-300" />
-              <h2 className="text-xs font-semibold uppercase tracking-wider text-white/55">Live Transcript</h2>
-            </div>
-            {micActive && <span className="text-[10px] text-red-400">● Recording</span>}
-            {isTranscribing && !micActive && <span className="text-[10px] text-primary">Processing…</span>}
-          </div>
-          <div className="flex-1 overflow-y-auto p-4">
-            {chunks.length === 0 && !liveTranscript && !isTranscribing ? (
-              <div className="h-full flex flex-col items-center justify-center text-center text-white/45 gap-2">
-                <Mic size={16} className="opacity-60" />
-                <p className="text-xs">Start recording to capture the conversation live.</p>
-              </div>
-            ) : (
-              <div className="space-y-2">
-                {chunks.map((c) => (
-                  <div key={c.id} className="rounded-xl border border-white/8 bg-white/[0.025] px-3 py-2">
-                    <div className="text-[10px] uppercase tracking-wider text-cyan-300/80 mb-1">Interviewer</div>
-                    <p className="text-sm leading-relaxed text-slate-200 whitespace-pre-wrap">{c.text}</p>
-                  </div>
-                ))}
-                {(liveTranscript || (micActive && !liveTranscript)) && (
-                  <div className="rounded-xl border border-primary/20 bg-primary/8 px-3 py-2">
-                    <div className="text-[10px] uppercase tracking-wider text-primary mb-1">Listening…</div>
-                    <p className="text-sm leading-relaxed text-slate-200/90 whitespace-pre-wrap italic">{liveTranscript ?? ""}</p>
-                  </div>
-                )}
-                <div ref={transcriptEndRef} />
-              </div>
-            )}
-          </div>
-        </div>
-
-        {/* RIGHT: AI 60% */}
         <div className="flex-1 flex flex-col overflow-hidden">
           <div className="flex items-center justify-between px-5 py-3 border-b border-border flex-shrink-0">
             <div className="flex items-center gap-2">
               <Zap size={12} className="text-[#8b5cf6]" />
-              <h2 className="text-xs font-semibold uppercase tracking-wider text-white/50">AI Assistant</h2>
+              <h2 className="text-xs font-semibold uppercase tracking-wider text-white/50">Conversation</h2>
               {answerReady && !isAnalyzing && (
                 <span className="text-[10px] uppercase tracking-wider px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-400/20">
                   Answer ready
@@ -1921,37 +1911,78 @@ function PiPContent({
             )}
           </div>
 
-          {/* Latest answer — fills the panel */}
           <div className="flex-1 overflow-y-auto p-5 min-h-0">
-            <AnimatePresence mode="wait">
-              {isAnalyzing && (
-                <motion.div key="analyzing" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-                  className="flex items-center gap-3 text-sm text-muted-foreground">
-                  <div className="w-8 h-8 rounded-xl flex items-center justify-center flex-shrink-0" style={{ background: "hsl(238 84% 67% / 0.12)" }}>
-                    <Zap size={14} className="text-primary animate-pulse" />
-                  </div>
-                  <span>Analyzing…</span>
-                </motion.div>
-              )}
-              {insights.length === 0 && !isAnalyzing && (
-                <motion.div key="empty" initial={{ opacity: 0 }} animate={{ opacity: 1 }}
-                  className="flex flex-col items-center justify-center h-full text-center text-white/55 pb-8">
-                  <div className="w-14 h-14 rounded-2xl mx-auto mb-4 flex items-center justify-center border border-white/10 bg-white/[0.04]" style={{ boxShadow: "inset 0 1px 0 rgba(255,255,255,0.06)" }}>
-                    <Zap size={22} className="text-[#8b5cf6]" />
-                  </div>
-                  <p className="text-sm font-medium mb-1 text-white/70">AI answers appear here</p>
-                  <p className="text-xs text-white/45 leading-relaxed max-w-44">
-                    Stop recording and the answer arrives instantly
-                  </p>
-                </motion.div>
-              )}
-              {insights.length > 0 && !isAnalyzing && (
-                <InsightCard key={insights[0].id} insight={insights[0]} />
-              )}
-            </AnimatePresence>
+            <div className="space-y-4">
+              {(() => {
+                const latestQuestion = liveTranscript ?? chunks[chunks.length - 1]?.text ?? insights[0]?.question ?? "";
+                const hasQuestion = Boolean(latestQuestion) || micActive || isTranscribing;
+
+                return (
+                  <>
+                    {hasQuestion && (
+                      <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}
+                        className="rounded-2xl border border-white/10 bg-white/[0.025] p-4 shadow-[0_10px_30px_rgba(15,23,42,0.2)]">
+                        <div className="flex items-center justify-between mb-3">
+                          <span className="text-[10px] font-bold uppercase tracking-[0.18em] text-cyan-300/80">Question</span>
+                          <span className="text-[10px] text-slate-400">
+                            {micActive ? "Listening…" : isTranscribing ? "Processing…" : "Transcript"}
+                          </span>
+                        </div>
+                        <p className="text-sm leading-relaxed text-slate-100 whitespace-pre-wrap">
+                          {latestQuestion || "Listening for the next question…"}
+                        </p>
+                      </motion.div>
+                    )}
+
+                    {isAnalyzing && (
+                      <motion.div key="analyzing" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+                        className="flex items-center gap-3 text-sm text-muted-foreground rounded-2xl border border-primary/15 bg-primary/5 p-4">
+                        <div className="w-8 h-8 rounded-xl flex items-center justify-center flex-shrink-0" style={{ background: "hsl(238 84% 67% / 0.12)" }}>
+                          <Zap size={14} className="text-primary animate-pulse" />
+                        </div>
+                        <span>Preparing the best answer…</span>
+                      </motion.div>
+                    )}
+
+                    {!isAnalyzing && latestInsight && (
+                      <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}
+                        className="rounded-2xl border border-emerald-400/20 bg-emerald-500/[0.06] p-4 shadow-[0_10px_30px_rgba(16,185,129,0.08)]">
+                        <div className="flex items-center justify-between mb-3">
+                          <span className="text-[10px] font-bold uppercase tracking-[0.18em] text-emerald-300">Answer</span>
+                          <span className="text-[10px] text-emerald-300/80 bg-emerald-500/10 border border-emerald-400/20 px-2 py-0.5 rounded-full">
+                            {latestInsight.confidence} confidence
+                          </span>
+                        </div>
+                        <div className="text-sm leading-relaxed text-slate-100">
+                          <InsightAnswer answer={latestInsight.answer} sections={latestInsight.sections} className="text-slate-100" />
+                        </div>
+                        {latestInsight.suggestions.length > 0 && (
+                          <div className="mt-4 rounded-xl border border-white/10 bg-slate-950/40 p-3">
+                            <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-300 mb-2">Suggested reply</p>
+                            <p className="text-sm leading-relaxed text-slate-200">{latestInsight.suggestions[0]}</p>
+                          </div>
+                        )}
+                      </motion.div>
+                    )}
+
+                    {!hasQuestion && !latestInsight && !isAnalyzing && (
+                      <motion.div key="empty" initial={{ opacity: 0 }} animate={{ opacity: 1 }}
+                        className="flex flex-col items-center justify-center h-full text-center text-white/55 pb-8 min-h-[280px]">
+                        <div className="w-14 h-14 rounded-2xl mx-auto mb-4 flex items-center justify-center border border-white/10 bg-white/[0.04]" style={{ boxShadow: "inset 0 1px 0 rgba(255,255,255,0.06)" }}>
+                          <Zap size={22} className="text-[#8b5cf6]" />
+                        </div>
+                        <p className="text-sm font-medium mb-1 text-white/70">AI answers appear here</p>
+                        <p className="text-xs text-white/45 leading-relaxed max-w-44">
+                          Stop recording and the answer arrives instantly
+                        </p>
+                      </motion.div>
+                    )}
+                  </>
+                );
+              })()}
+            </div>
           </div>
 
-          {/* History strip — previous questions, compact */}
           {insights.length > 1 && (
             <div className="flex-shrink-0 border-t border-border/50 px-4 py-2 space-y-0.5 max-h-32 overflow-y-auto" style={{ background: "hsl(var(--muted)/0.2)" }}>
               <p className="text-[9px] font-bold uppercase tracking-widest text-muted-foreground/40 mb-1">Previous</p>

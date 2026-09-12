@@ -27,6 +27,10 @@ module.exports = {
     target: [{ target: "nsis", arch: ["x64"] }],
     icon: "icon.ico",
     artifactName: "Hikanest-Setup.${ext}",
+    // Code Signing: electron-builder automatically signs when
+    // CSC_LINK (base64 .pfx) and CSC_KEY_PASSWORD are set as env vars.
+    signingHashAlgorithms: ["sha256"],
+    signDlls: true,
   },
 
   publish: {

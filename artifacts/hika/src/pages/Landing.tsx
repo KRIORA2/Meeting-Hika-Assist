@@ -8,7 +8,7 @@ import {
 } from "lucide-react";
 
 type BeforeInstallPromptEvent = Event & {
-      desc: "Stop recording and Hikanest instantly surfaces answers, suggestions, and key points.",
+  prompt: () => Promise<void>;
   userChoice: Promise<{ outcome: "accepted" | "dismissed" }>;
 };
 
