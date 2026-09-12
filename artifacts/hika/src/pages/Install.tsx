@@ -6,17 +6,17 @@ export default function Install() {
 
   const downloads = {
     Windows: {
-      url: "/downloads/windows/Hikanest-Setup.exe",
+      url: "https://github.com/A2Forge/hika-assist/releases/latest/download/Hikanest-Setup.exe",
       fileName: "Hikanest-Setup.exe",
       available: true,
     },
     macOS: {
-      url: "/downloads/macos/Hika.dmg",
+      url: "https://github.com/A2Forge/hika-assist/releases/latest/download/Hikanest-1.0.0.dmg",
       fileName: "Hikanest.dmg",
       available: false,
     },
     Linux: {
-      url: "/downloads/linux/Hika.AppImage",
+      url: "https://github.com/A2Forge/hika-assist/releases/latest/download/Hikanest-1.0.0.AppImage",
       fileName: "Hikanest.AppImage",
       available: false,
     },

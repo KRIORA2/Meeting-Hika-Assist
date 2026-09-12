@@ -77,6 +77,8 @@
     "zod": "catalog:"
   },
   "dependencies": {
-    "@react-oauth/google": "^0.13.5"
+    "@react-oauth/google": "^0.13.5",
+    "react-markdown": "^10.1.0",
+    "remark-gfm": "^4.0.1"
   }
 }
