@@ -674,18 +674,52 @@ body {
   padding: 0;
 }
 .ai-q {
-  display: none;
+  display: block;
+  margin: 0 0 10px;
+  padding: 0 2px 8px;
+  border-bottom: 1px solid rgba(255,255,255,0.08);
+}
+.ai-q-lbl {
+  display: block;
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: #7d8bb0;
+  margin-bottom: 4px;
+}
+.ai-q-text {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.45;
+  font-weight: 600;
+  color: #d7e2ff;
 }
 .ai-a {
   display: block;
   padding: 2px 2px 10px;
   font-size: 15px;
-  line-height: 1.55;
+  line-height: 1.62;
   color: #f4f7ff;
   font-weight: 500;
   white-space: pre-wrap;
 }
 .ai-spoken { letter-spacing: 0.01em; }
+.ai-a-opener {
+  font-size: 16px;
+  line-height: 1.5;
+  color: #f8fbff;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  margin: 0 0 8px;
+}
+.ai-a-body {
+  margin: 0;
+  font-size: 15px;
+  line-height: 1.62;
+  color: #e8eefc;
+  font-weight: 500;
+}
 .ai-answer-row {
   display: flex;
   flex-wrap: wrap;
@@ -723,14 +757,6 @@ body {
   text-transform: uppercase;
   color: #34d399;
 }
-.ai-a-opener {
-  font-size: 17px;
-  line-height: 1.4;
-  color: #f8fbff;
-  font-weight: 600;
-  letter-spacing: 0.01em;
-  margin-bottom: 4px;
-}
 .ai-a-explain {
   margin-top: 10px;
   padding-top: 8px;
@@ -760,11 +786,11 @@ body {
 .copy-btn:hover { color: var(--text); background: rgba(255,255,255,0.1); }
 
 .ai-code-block {
-  background: rgba(5,11,27,0.82);
-  border: 1px solid rgba(130,150,255,0.28);
-  border-radius: 10px;
-  padding: 8px 10px;
-  margin: 10px 0 4px;
+  background: rgba(5,11,27,0.88);
+  border: 1px solid rgba(52,211,153,0.22);
+  border-radius: 12px;
+  padding: 12px 12px 10px;
+  margin: 0 0 12px;
   position: relative;
 }
 .ai-code-lbl {
@@ -811,10 +837,15 @@ body {
 .history-lbl { font-size: 8px; font-weight: 700; text-transform: uppercase; letter-spacing: .1em; color: var(--dim); margin-bottom: 3px; }
 .history-item {
   display: flex; gap: 8px; align-items: center;
-  font-size: 10px; color: rgba(148,163,184,0.5); padding: 1px 0;
+  font-size: 10px; color: rgba(148,163,184,0.5); padding: 2px 4px;
   cursor: pointer;
+  border-radius: 6px;
 }
-.history-item:hover { color: rgba(148,163,184,0.8); }
+.history-item:hover { color: rgba(148,163,184,0.8); background: rgba(255,255,255,0.04); }
+.history-item.active {
+  color: #dce6ff;
+  background: rgba(109,125,255,0.16);
+}
 .history-time { font-family: monospace; font-size: 9px; flex-shrink: 0; }
 .history-q { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 

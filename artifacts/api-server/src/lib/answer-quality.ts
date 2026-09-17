@@ -25,6 +25,9 @@ const WIKIPEDIA_OPENER = /^(data skew is a (phenomenon|condition)|in distributed
 const CASUAL_OPENER = /^(yeah[,.]?\s+|yup[,.]?\s+|so basically[,.]?\s+|right,? so[,.]?\s+)/i;
 const SPOKEN_MARKER = /\b(I|I'm|I'd|I've|we|we're|we'd|I'll|for example|the reason|one (issue|challenge|thing)|first I'd|in that situation|from a production|in practice|I wouldn't|I'd (first|start|check|approach|use|look))\b/i;
 const CATCH_PHRASE = /didn't catch a clear english question/i;
+const INVENTED_FICTION = /\bs3a:\/\/my-bucket\b|\bs3:\/\/my-bucket\b|\/\/my-bucket\/|i set up a slack alert|slack alert\b/i;
+const FUNCTION_CATALOG = /variety of (pyspark )?transformations|filter, select, withcolumn|withcolumn and withcolumnrenamed/i;
+const STRONG_POINT = /\b(for example|from a production|in practice|day to day|typically|the reason|I (use|used|wouldn't|usually|generally|also)|we (use|used|land|write|keep|run))\b/i;
 
 export function looksLikeUsEnglish(text: string) {
   const value = String(text || "").replace(/\s+/g, " ").trim();
@@ -50,10 +53,24 @@ export function isProcessQuestion(text: string): boolean {
   return /(how (can|do|would) (you|we)|handle this situation|provide access|grant access|onboard|new (resource|user|joiner|employee|engineer|hire)|give him access|give them access|workspace access|as an admin)/i.test(t);
 }
 
+export function isMeaningQuestion(text: string): boolean {
+  const t = String(text || "").toLowerCase();
+  if (/(write|show me|give me|paste|implement)\b.{0,40}\b(code|query|script|sql|pyspark|python)\b/i.test(t)) {
+    return false;
+  }
+  return /(what do you mean|what does .{0,40} mean|what is|what are|what's|explain|define |where (do|would|we) (we )?use|when (do|would) (you|we) use)/i.test(t);
+}
+
+export function isExperienceQuestion(text: string): boolean {
+  const t = String(text || "").toLowerCase();
+  return /(in your (current )?project|you have used|have you used|how did you (implement|handle|use)|what (are|were) the transformations|transformations you have used|roles and responsibilities)/i.test(t);
+}
+
 export function isCodeIntent(text: string): boolean {
   const t = text.toLowerCase();
   if (isProcessQuestion(t)) return false;
-  return /(write (me )?(a |the )?(code|query|script|function)|give me (the )?(code|sql|query|script)|show me (the )?(code|sql|pyspark|query)|paste the (code|query)|executable code|implement (this|it) in|python script|pyspark (code|script)|sql query to|write a query|write the query)/i.test(t);
+  if (isMeaningQuestion(t)) return false;
+  return /(write (me )?(a |the )?(code|query|script|function)|give me (the )?(code|sql|query|script)|show me (the )?(code|sql|pyspark|query)|paste the (code|query)|executable code|implement (this|it) in|python script|pyspark (code|script)|sql query to|write a query|write the query|write a pyspark)/i.test(t);
 }
 
 export function looksLikeCodeDump(text: string): boolean {
@@ -80,6 +97,14 @@ function lowerFirst(value: string) {
   if (!trimmed) return trimmed;
   if (/^[A-Z]{2,}/.test(trimmed) || /^(ADF|ADLS|SQL|I|I'd|I'm|We)\b/.test(trimmed)) return trimmed;
   return trimmed.charAt(0).toLowerCase() + trimmed.slice(1);
+}
+
+export function looksThinInterview(text: string): boolean {
+  const cleaned = String(text || "").replace(/\s+/g, " ").trim();
+  if (!cleaned) return true;
+  const sentences = cleaned.split(/(?<=[.!?])\s+/).map((line) => line.trim()).filter((line) => line.length > 18);
+  const words = cleaned.split(/\s+/).filter(Boolean);
+  return sentences.length < 2 && words.length < 45;
 }
 
 export function looksLikeBulletNotes(text: string): boolean {
@@ -153,13 +178,15 @@ export function toParakeetScript(text: string) {
 
 export type AnswerQuality = {
   ok: boolean;
-  reason: "ok" | "code_dump" | "titled_box" | "wikipedia_paragraph" | "generic_ai" | "empty" | "bullet_notes";
+  reason: "ok" | "code_dump" | "titled_box" | "wikipedia_paragraph" | "generic_ai" | "empty" | "bullet_notes" | "invented";
 };
 
 export function scoreEmployeeAnswer(answer: string, askedForCode = false): AnswerQuality {
   const text = String(answer || "").trim();
   if (!text) return { ok: false, reason: "empty" };
   if (CATCH_PHRASE.test(text)) return { ok: true, reason: "ok" };
+  if (INVENTED_FICTION.test(text)) return { ok: false, reason: "invented" };
+  if (!askedForCode && FUNCTION_CATALOG.test(text)) return { ok: false, reason: "generic_ai" };
   if (!askedForCode && looksLikeCodeDump(text)) return { ok: false, reason: "code_dump" };
   if (TITLED_BOX.test(text) || ALL_CAPS_TITLE.test(text)) return { ok: false, reason: "titled_box" };
   if (GENERIC_AI.test(text) || EVASIVE.test(text)) return { ok: false, reason: "generic_ai" };
@@ -167,5 +194,7 @@ export function scoreEmployeeAnswer(answer: string, askedForCode = false): Answe
   if (!askedForCode && WIKIPEDIA_OPENER.test(text)) return { ok: false, reason: "wikipedia_paragraph" };
   if (!askedForCode && CASUAL_OPENER.test(text)) return { ok: false, reason: "generic_ai" };
   if (!askedForCode && !SPOKEN_MARKER.test(text)) return { ok: false, reason: "wikipedia_paragraph" };
+  if (!askedForCode && looksThinInterview(text)) return { ok: false, reason: "wikipedia_paragraph" };
+  if (!askedForCode && !STRONG_POINT.test(text)) return { ok: false, reason: "wikipedia_paragraph" };
   return { ok: true, reason: "ok" };
 }

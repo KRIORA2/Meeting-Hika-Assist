@@ -134,6 +134,21 @@ export const KNOWLEDGE_TOPICS: KnowledgeTopic[] = [
     },
   },
   {
+    id: "lakeview",
+    title: "Databricks Lakeview / lakehouse views",
+    sources: [
+      "https://learn.microsoft.com/en-us/azure/databricks/dashboards/",
+      "https://docs.databricks.com/",
+    ],
+    keywords: ["lake view", "lakeview", "lakeview dashboard", "ai/bi", "databricks dashboard"],
+    extras: ["databricks", "sql"],
+    slices: {
+      fundamentals: "Two different things. Databricks Lakeview is AI/BI dashboards on the lakehouse, not a table. A lakehouse or SQL view is a named query over Delta so analysts do not read raw files.",
+      production: "Dashboards go on Gold or a SQL warehouse, not bronze. SQL views live in Unity Catalog. If the interviewer says lake view, confirm which they mean, then answer that.",
+      tradeoffs: "Lakeview for reporting UX. Views for a stable SQL contract over changing files.",
+    },
+  },
+  {
     id: "autoloader",
     title: "Auto Loader",
     sources: ["https://learn.microsoft.com/en-us/azure/databricks/", "https://docs.databricks.com/"],
@@ -169,7 +184,7 @@ export const KNOWLEDGE_TOPICS: KnowledgeTopic[] = [
     extras: ["databricks", "delta"],
     slices: {
       fundamentals: "Spark is a DataFrame/SQL engine. Driver plus executors. Shuffle is the expensive part. DataFrames first, RDD is legacy.",
-      production: "Broadcast the small side. AQE coalesces post-shuffle and can convert sort-merge to broadcast. shuffle.partitions default 200 is often wrong. Avoid Python UDFs on fat data.",
+      production: "Broadcast the small side. AQE coalesces post-shuffle and can convert sort-merge to broadcast. shuffle.partitions default 200 is often wrong. Avoid Python UDFs on fat data. A load is a flow: bronze land, typed select/filter, withColumn, join reference, write Delta — not a function catalog.",
       troubleshooting: "Spark UI: stage time, shuffle read, spill, one task sitting forever (skew). Broadcast, salt, or repartition. Only then scale the cluster.",
     },
   },
@@ -289,10 +304,10 @@ export const KNOWLEDGE_TOPICS: KnowledgeTopic[] = [
       "https://learn.microsoft.com/en-us/sql/sql-server/",
       "https://learn.microsoft.com/en-us/power-bi/guidance/star-schema",
     ],
-    keywords: ["sql", "window function", "cte", "merge into", "row_number", "star schema", "watermark"],
+    keywords: ["sql", "window function", "cte", "merge into", "row_number", "star schema", "watermark", "left join", "inner join", "right join"],
     extras: ["databases", "spark"],
     slices: {
-      fundamentals: "Incremental watermark, ROW_NUMBER dedupe, MERGE SCD2, windows, left anti for reconciliation. Star schema for BI.",
+      fundamentals: "Incremental watermark, ROW_NUMBER dedupe, MERGE SCD2, windows, left anti for reconciliation. Star schema for BI. Inner join keeps matches. Left join keeps the driving table. Right join keeps the right. Speak the meaning before dumping SELECT.",
       production: "Same SQL idea in Spark, Snowflake, BigQuery, Azure SQL — dialect knobs change. Pick store by access pattern.",
     },
   },

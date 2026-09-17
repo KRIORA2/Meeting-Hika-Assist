@@ -19,6 +19,15 @@ function isPlaceholderDump(text: string) {
   return /DATABRICKS_INSTANCE|<your-|personal-access-token|preview\/scim/i.test(text);
 }
 
+function splitSpoken(spoken: string) {
+  const text = spoken.trim();
+  const match = text.match(/^(.+?[.!?])\s+([\s\S]+)$/);
+  if (match && match[1].length >= 24 && match[1].length <= 240 && match[2].length > 28) {
+    return { opener: match[1], rest: match[2] };
+  }
+  return { opener: text, rest: "" };
+}
+
 export default function InsightAnswer({ answer, sections, keyPoints, className, compact = false }: Props) {
   const spoken = isPlaceholderDump(answer || "") ? "" : (answer || "").trim();
   const codeSections = (sections ?? []).filter((section) => {
@@ -30,6 +39,7 @@ export default function InsightAnswer({ answer, sections, keyPoints, className, 
       || ["sql", "python", "scala", "bash", "hcl", "json"].includes(language);
   });
   const points = (keyPoints ?? []).map((point) => point.trim()).filter(Boolean).slice(0, 5);
+  const parts = spoken ? splitSpoken(spoken) : { opener: "", rest: "" };
 
   if (!spoken && !codeSections.length) return null;
 
@@ -43,7 +53,7 @@ export default function InsightAnswer({ answer, sections, keyPoints, className, 
             return (
               <pre
                 key={`${section.title || "code"}-${index}`}
-                className="text-[11px] leading-relaxed text-emerald-300 whitespace-pre-wrap font-mono m-0 rounded-lg border border-border/60 bg-black/35 p-3"
+                className="m-0 whitespace-pre-wrap rounded-xl border border-emerald-400/20 bg-black/45 p-3.5 font-mono text-[12px] leading-relaxed text-emerald-300"
               >
                 {content}
               </pre>
@@ -56,12 +66,16 @@ export default function InsightAnswer({ answer, sections, keyPoints, className, 
         <div className={cn("flex gap-3 items-start", compact && "flex-col")}>
           <div
             className={cn(
-              "min-w-0 flex-1 max-w-none whitespace-pre-wrap text-[15px] leading-relaxed text-slate-100",
-              compact ? "text-sm leading-relaxed" : "text-[15px] leading-[1.58]",
+              "min-w-0 flex-1 max-w-none text-slate-100",
+              compact ? "text-sm leading-relaxed" : "text-[15px] leading-[1.62]",
               className
             )}
           >
-            {spoken}
+            <p className="m-0 font-semibold tracking-[0.01em] text-slate-50">{parts.opener}</p>
+            {parts.rest ? <p className="mt-2 mb-0 font-medium leading-[1.62] text-slate-100/95">{parts.rest}</p> : null}
+            {!compact && !codeSections.length ? (
+              <p className="mt-2 mb-0 text-[10px] font-bold uppercase tracking-[0.12em] text-emerald-400">Ready to speak</p>
+            ) : null}
           </div>
           {points.length > 0 && (
             <aside className="w-[140px] shrink-0 rounded-xl border border-white/10 bg-white/[0.04] px-3 py-2">

@@ -887,6 +887,7 @@ function PiPContent({
   const [liveTranscript, setLiveTranscript] = useState<string | null>(null);
   const liveTranscriptRef = useRef<string | null>(null);
   const [insights, setInsights] = useState<Insight[]>([]);
+  const [selectedHistoryId, setSelectedHistoryId] = useState<string | null>(null);
   const [manualQ, setManualQ] = useState("");
   const [showOverlay, setShowOverlay] = useState(false);
   const [sessionStart, setSessionStart] = useState<Date | null>(null);
@@ -939,7 +940,7 @@ function PiPContent({
     transcriptEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [chunks, liveTranscript]);
 
-  const latestInsight = insights[0];
+  const latestInsight = insights.find((item) => item.id === selectedHistoryId) ?? insights[0];
 
   // ── Analysis ──────────────────────────────────────────────────────────────
 
@@ -1014,7 +1015,7 @@ function PiPContent({
       sessionMode === "interview"
         ? "Interview: answer as the candidate, first person, like a real senior data engineer speaking on the call."
         : "Meeting: answer as this person talking to teammates. Decisive, current, first person.",
-      "Every question: experienced employee voice — what it is, why it happens, how I handle it at work. Opener plus 3 to 5 • bullets. Queries get real SQL plus a short explanation.",
+      "Every question: same shape — explain the topic as a working employee first, then the complete process they asked about. No bullets. Queries get that spoken process plus real SQL.",
     ].filter(Boolean).join("\n");
 
     const ctx = utterance
@@ -1023,7 +1024,10 @@ function PiPContent({
         ? `ANSWER THIS: "${question}"\n${profileContext}\n\n${recentTranscript}`
         : `${profileContext}\n${latestText.slice(-400)}`;
 
-    const historyForRequest = conversationHistoryRef.current.slice(-8);
+    const historyForRequest = conversationHistoryRef.current.slice(-6).map((turn) => ({
+      role: turn.role,
+      content: String(turn.content || "").slice(0, turn.role === "assistant" ? 180 : 240),
+    }));
     const userTurn = latestText.trim();
 
     try {
@@ -1065,22 +1069,25 @@ function PiPContent({
         timestamp: new Date(),
       };
       persistInsight(insight);
+      setSelectedHistoryId(null);
 
+      const withHistory = (next: Insight) => (prev: Insight[]) =>
+        [next, ...prev.filter((item) => item.id !== next.id && item.answer !== "Preparing the best response from live context…")].slice(0, 20);
 
       const words = answer.split(/(\s+)/).filter((w: string) => w.length > 0);
       if (words.length < 60) {
-        setInsights([insight]);
+        setInsights(withHistory(insight));
         setAnswerReady(true);
       } else {
         let cursor = 0;
         revealTimerRef.current = setInterval(() => {
           cursor = Math.min(words.length, cursor + 6);
           const partial = words.slice(0, cursor).join("");
-          setInsights([{ ...insight, answer: partial }]);
+          setInsights(withHistory({ ...insight, answer: partial }));
           if (cursor >= words.length && revealTimerRef.current) {
             clearInterval(revealTimerRef.current);
             revealTimerRef.current = null;
-            setInsights([insight]);
+            setInsights(withHistory(insight));
             setAnswerReady(true);
           }
         }, 20);
@@ -1195,6 +1202,7 @@ function PiPContent({
         timestamp: new Date(),
       };
       setInsights([insight]);
+      setSelectedHistoryId(null);
       const responseKey = realtimeResponseIdRef.current;
       if (done && responseKey && !persistedResponseIdsRef.current.has(responseKey)) {
         if (persistedResponseIdsRef.current.size >= 64) persistedResponseIdsRef.current.clear();
@@ -2019,8 +2027,10 @@ function PiPContent({
           <div className="flex-1 overflow-y-auto p-5 min-h-0">
             <div className="space-y-4">
               {(() => {
-                const latestQuestion = liveTranscript ?? chunks[chunks.length - 1]?.text ?? insights[0]?.question ?? "";
-                const hasQuestion = Boolean(latestQuestion) || micActive || isTranscribing;
+                const displayedQuestion = selectedHistoryId
+                  ? latestInsight?.question ?? ""
+                  : liveTranscript ?? chunks[chunks.length - 1]?.text ?? insights[0]?.question ?? "";
+                const hasQuestion = Boolean(displayedQuestion) || micActive || isTranscribing;
 
                 return (
                   <>
@@ -2034,7 +2044,7 @@ function PiPContent({
                           </span>
                         </div>
                         <p className="text-sm leading-relaxed text-slate-100 whitespace-pre-wrap">
-                          {latestQuestion || "Listening for the next question…"}
+                          {displayedQuestion || "Listening for the next question…"}
                         </p>
                       </motion.div>
                     )}
@@ -2092,12 +2102,20 @@ function PiPContent({
             <div className="flex-shrink-0 border-t border-border/50 px-4 py-2 space-y-0.5 max-h-32 overflow-y-auto" style={{ background: "hsl(var(--muted)/0.2)" }}>
               <p className="text-[9px] font-bold uppercase tracking-widest text-muted-foreground/40 mb-1">Previous</p>
               {insights.slice(1).map((ins) => (
-                <div key={ins.id} className="flex items-center gap-2 py-0.5">
+                <button
+                  key={ins.id}
+                  type="button"
+                  onClick={() => setSelectedHistoryId(ins.id)}
+                  className={cn(
+                    "flex w-full items-center gap-2 py-0.5 text-left rounded px-1",
+                    selectedHistoryId === ins.id ? "bg-white/10 text-slate-100" : "hover:bg-white/5",
+                  )}
+                >
                   <span className="text-[10px] text-muted-foreground/50 font-mono flex-shrink-0">
                     {ins.timestamp.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
                   </span>
                   <span className="text-[11px] text-muted-foreground/60 truncate">{ins.question}</span>
-                </div>
+                </button>
               ))}
             </div>
           )}

@@ -877,10 +877,10 @@ async function handleStart() {
   const jobContext = (jobPostUrl?.value || "").trim();
   const languageContext = "Write the transcript and every answer in US English with American spelling. Never use Hindi or any other language.";
   sessionGuidance = [
-    "Write on-screen answers like a senior engineer speaking in the interview: conversational paragraphs, not bullet notes. No Yeah. Do not force 'In my current project' on every question.",
-    "Every question — technical, scenario, access, behavioral — answer as an experienced data engineer: what it is, why it happens, how I handle it at work.",
-    "First person. No headings, no textbook dump, no REST/SCIM/placeholder Python unless they asked for that script.",
-    "If they asked for a query or script: full real production SQL/PySpark, then a short spoken explanation of that query under it.",
+    "Same answer shape for every question: explain the topic as a real working employee first, then walk the complete process they asked about. No Yeah. No • bullets unless they asked for a list.",
+    "Every question — technical, scenario, access, behavioral, definition — first person, how I actually do this at work, then production points.",
+    "No headings, no textbook dump, no REST/SCIM/placeholder Python unless they asked for that script.",
+    "If they asked for a query or script: employee explanation first, then full real production SQL/PySpark.",
     selectedSessionMode === "interview"
       ? "This is a live interview. Answer the interviewer as the candidate — direct talking points, not a lecture."
       : "This is a live work meeting. Answer as this person talking to teammates — short, decisive talking points.",
@@ -1796,13 +1796,14 @@ async function analyze(utterance) {
     screenshotBase64 = await window.hikaElectron.captureScreen().catch(() => null);
   }
 
-  const codeRequest = /\b(write|show me|give me|paste)\b.{0,40}\b(code|sql|query|script|pyspark|python)\b|\b(executable code|sql query to|pyspark code|python script)\b/i.test(utterance);
+  const codeRequest = /\b(write|show me|give me|paste)\b.{0,40}\b(code|sql|query|script|pyspark|python)\b|\b(executable code|sql query to|pyspark code|python script|write a pyspark)\b/i.test(utterance)
+    && !/\b(what do you mean|what is|what are|explain|define)\b/i.test(utterance);
   const context = [
-    `ANSWER THIS: "${utterance}"`,
+    `ANSWER THIS: "${utterance.replace(/"/g, "'")}"`,
     sessionGuidance ? `Session guidance: ${sessionGuidance}` : "",
     codeRequest
-      ? "They asked for a query or script. Return a complete real production query, no placeholders, then a short spoken explanation of what that query does."
-      : "Every question: answer as an experienced data engineer. What it is, why it happens, how I handle it at work. One opener, then 3 to 5 short • bullets. No REST/SCIM unless they asked for that script.",
+      ? "They asked for a query or script. Employee explanation first, then complete production code. Use abfss example paths, never s3://my-bucket."
+      : "Same shape every question: real-employee explanation of the topic first, then the complete process they asked about. No bullets. Do not invent employers, incidents, or file paths.",
     `Timestamp: ${new Date().toISOString()}`,
   ].filter(Boolean).join("\n");
 
@@ -1814,9 +1815,9 @@ async function analyze(utterance) {
       uploadedDocs: uploadedDocs.slice(0, 3).map(d => ({ id: d.id, name: d.name })),
       model: selectedModel,
       mode: selectedSessionMode === "call" ? "meeting" : "interview",
-      history: insights.slice(0, 8).reverse().flatMap(item => [
-        { role: "user", content: item.question || "" },
-        { role: "assistant", content: item.answer || "" },
+      history: insights.slice(0, 4).reverse().flatMap(item => [
+        { role: "user", content: String(item.question || "").slice(0, 240) },
+        { role: "assistant", content: String(item.answer || "").slice(0, 180) },
       ]),
     });
     if (!result) return false;
@@ -1915,7 +1916,7 @@ function renderInsights() {
     return;
   }
 
-  // Latest answer always shown to avoid stale-looking filtered state.
+  // Latest answer, or the previous item they clicked — question and answer stay paired.
   const activeInsight = selectedHistoryInsight || insights[0];
   const card = buildInsightCard(activeInsight);
   aiScroll.appendChild(card);
@@ -1925,9 +1926,9 @@ function renderInsights() {
   if (visibleHistory.length > 0) {
     historyStrip.style.display = "block";
     historyList.innerHTML = "";
-    visibleHistory.forEach((ins, i) => {
+    visibleHistory.forEach((ins) => {
       const div = document.createElement("div");
-      div.className = "history-item";
+      div.className = "history-item" + (selectedHistoryInsight === ins ? " active" : "");
       const t = ins.timestamp;
       div.innerHTML = `
         <span class="history-time">${pad(t.getHours())}:${pad(t.getMinutes())}</span>
@@ -1935,6 +1936,11 @@ function renderInsights() {
       `;
       div.addEventListener("click", () => {
         selectedHistoryInsight = ins;
+        if (ins.question) {
+          liveTxText.value = ins.question;
+          micTranscriptText = ins.question;
+        }
+        setLiveBadge("Previous", "captured");
         renderInsights();
       });
       historyList.appendChild(div);
@@ -1951,7 +1957,7 @@ function buildInsightCard(ins) {
   if (ins.question && ins.question !== "Live question") {
     const question = document.createElement("div");
     question.className = "ai-q";
-    question.textContent = ins.question;
+    question.innerHTML = `<span class="ai-q-lbl">${selectedHistoryInsight ? "Previous question" : "Question"}</span><p class="ai-q-text">${escHtml(ins.question)}</p>`;
     card.appendChild(question);
   }
 
@@ -2089,6 +2095,15 @@ function collectKeyPoints(ins, spoken) {
   return hits;
 }
 
+function splitSpoken(spoken) {
+  const text = String(spoken || "").trim();
+  const match = text.match(/^(.+?[.!?])\s+([\s\S]+)$/);
+  if (match && match[1].length >= 24 && match[1].length <= 240 && match[2].length > 28) {
+    return { opener: match[1], rest: match[2] };
+  }
+  return { opener: text, rest: "" };
+}
+
 function renderAnswerBlocks(ins) {
   const wrap = document.createElement("div");
   const rawAnswer = isPlaceholderDump(ins.answer) ? "" : String(ins.answer || "").trim();
@@ -2106,18 +2121,25 @@ function renderAnswerBlocks(ins) {
   });
 
   if (spoken) {
+    const parts = splitSpoken(spoken);
     const row = document.createElement("div");
     row.className = keys.length ? "ai-answer-row" : "ai-a-wrap";
     const spokenCol = document.createElement("div");
     spokenCol.className = "ai-a-wrap ai-spoken-col";
     const aText = document.createElement("div");
     aText.className = "ai-a ai-spoken";
-    aText.textContent = spoken;
+    if (parts.rest) {
+      aText.innerHTML = `<p class="ai-a-opener">${escHtml(parts.opener)}</p><p class="ai-a-body">${escHtml(parts.rest)}</p>`;
+    } else {
+      aText.innerHTML = `<p class="ai-a-opener">${escHtml(parts.opener)}</p>`;
+    }
     spokenCol.appendChild(aText);
-    const pill = document.createElement("div");
-    pill.className = "ai-speaking";
-    pill.textContent = "● Ready to speak";
-    spokenCol.appendChild(pill);
+    if (!blocks.length) {
+      const pill = document.createElement("div");
+      pill.className = "ai-speaking";
+      pill.textContent = "● Ready to speak";
+      spokenCol.appendChild(pill);
+    }
     spokenCol.appendChild(makeCopyBtn(spoken));
     row.appendChild(spokenCol);
     if (keys.length) {

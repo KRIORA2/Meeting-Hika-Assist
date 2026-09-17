@@ -22,8 +22,15 @@ for (const item of pack) {
 }
 
 assert.equal(isCodeIntent("Could you please explain about data skew?"), false);
+assert.equal(isCodeIntent("So what do you mean by left join, right join and inner join?"), false);
+assert.equal(isCodeIntent("What is lake view and where we use this lake view?"), false);
 assert.equal(isCodeIntent("A new data engineer joined. How can you provide access?"), false);
 assert.equal(isCodeIntent("Write a SQL query to dedupe events by id keeping the latest timestamp"), true);
+assert.equal(isCodeIntent("Write a PySpark query to read the data from the external storage"), true);
+assert.equal(matchFrozenAnswer("What are the transformations you have used in your project to load the data?")?.id, "load-transforms");
+assert.equal(matchFrozenAnswer("So what do you mean by left join, right join and inner join?")?.id, "sql-joins-meaning");
+assert.equal(matchFrozenAnswer("What is lake view and where we use this lake view?")?.id, "lake-view");
+assert.equal(matchingSubjects("What is lake view and where we use this lake view?")[0], "lakeview");
 assert.equal(matchFrozenAnswer("Could you please explain about data skew?")?.id, "data-skew");
 assert.equal(matchFrozenAnswer("What is Unity Cloud and where we use it in your current project?")?.id, "unity-catalog");
 assert.equal(matchFrozenAnswer("Have you worked on RBAC?")?.id, "uc-rbac");
@@ -57,6 +64,21 @@ assert.equal(
   scoreEmployeeAnswer("ADF is a cloud ETL service.\n• Pipelines\n• Activities\n• Linked services\n• Datasets").ok,
   false,
   "Bullet notes must fail",
+);
+assert.equal(
+  scoreEmployeeAnswer("When loading data in my projects, I use a variety of PySpark transformations like filter, select, withColumn, join, groupBy, distinct and orderBy.").ok,
+  false,
+  "Function catalog answers must fail",
+);
+assert.equal(
+  scoreEmployeeAnswer("df = spark.read.format('parquet').load('s3a://my-bucket/data/employee/')", true).ok,
+  false,
+  "Invented S3 buckets must fail",
+);
+assert.equal(
+  scoreEmployeeAnswer("I know inner join keeps matching keys. Left join keeps the left table.").ok,
+  false,
+  "Thin textbook answers without employee points must fail",
 );
 assert.equal(
   scoreEmployeeAnswer("Azure Data Factory is essentially the orchestration service we use in Azure. In my current project we use it to land data in ADLS and trigger Databricks.").ok,
