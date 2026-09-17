@@ -28,15 +28,17 @@ const DEFAULT_EMBEDDING_MODEL = process.env.OPENAI_EMBEDDING_MODEL || "text-embe
 const DEFAULT_REALTIME_MODEL = process.env.OPENAI_REALTIME_MODEL || "gpt-realtime";
 const DEFAULT_REALTIME_TRANSCRIPTION_MODEL = process.env.OPENAI_REALTIME_TRANSCRIPTION_MODEL || "gpt-4o-transcribe";
 const DEFAULT_REALTIME_NOISE_REDUCTION = process.env.OPENAI_REALTIME_NOISE_REDUCTION === "far_field" ? "far_field" : "near_field";
-const TRANSCRIPTION_PROMPT = "Yeah, so the next question is about the data pipeline and how we handle late arriving records.";
+const TRANSCRIPTION_PROMPT = "A clear American English question from a data engineering meeting.";
 
+const ENGLISH_QUESTION = /\b(what|why|how|when|where|who|which|tell|explain|describe|walk|can you|could you|would you)\b/i;
 const ENGLISH_FUNCTION_WORDS = new Set([
   "the", "a", "an", "is", "are", "was", "were", "you", "i", "we", "they", "to", "of", "and", "in",
   "that", "it", "for", "on", "with", "this", "have", "be", "what", "how", "why", "can", "do", "does",
   "tell", "me", "about", "your", "my", "so", "yeah", "okay", "ok", "like", "just", "when", "if", "or",
   "not", "but", "from", "at", "as", "would", "could", "should", "will", "there", "here", "please",
-  "yes", "no", "right", "well", "hello", "hi", "hey",
+  "yes", "no", "right", "well", "hello", "hi", "hey", "explain",
 ]);
+const WEAK_ENGLISH_WORDS = new Set(["a", "an", "i", "no", "ok", "to", "or"]);
 const FOREIGN_FUNCTION_WORDS = new Set([
   "alsof", "hemel", "het", "een", "van", "niet", "jij", "jullie", "und", "der", "die", "das", "ich",
   "nicht", "que", "para", "como", "esto", "esta", "les", "des", "une", "pas", "avec", "oui",
@@ -44,8 +46,9 @@ const FOREIGN_FUNCTION_WORDS = new Set([
   "kaise", "nahi", "nahin", "haan", "theek", "acha", "accha", "bhai", "kyun", "kyon", "mera",
   "meri", "tum", "hum", "kaun", "kab", "kahan", "woh", "yeh", "aur", "itu", "bagus", "sekali",
   "saya", "tidak", "yang", "untuk", "ada", "ini", "hallo", "wie", "geht", "dir", "nuk", "kuptoj",
+  "tardo", "diario", "kocham", "bueno", "gracias", "hola", "porque", "pero", "muy", "aqui", "ahora",
 ]);
-const HALLUCINATED_TRANSCRIPT = /thanks for watching|thank you for watching|please subscribe|the boy ran quickly|\[music\]|\[silence\]|rewrite:|clarifying:|greeting:|translation:|subtitle:/i;
+const HALLUCINATED_TRANSCRIPT = /thanks for watching|thank you for watching|please subscribe|the boy ran quickly|\[music\]|\[silence\]|rewrite:|clarifying:|greeting:|translation:|subtitle:|respond to /i;
 
 function looksLikeUsEnglish(text: string) {
   const value = text.replace(/\s+/g, " ").trim();
@@ -55,12 +58,14 @@ function looksLikeUsEnglish(text: string) {
   }
   if (HALLUCINATED_TRANSCRIPT.test(value)) return false;
   const words = value.toLowerCase().replace(/[^a-z'\s]/g, " ").split(/\s+/).filter(Boolean);
-  if (!words.length) return false;
+  if (words.length < 3) return false;
   const englishHits = words.filter((word) => ENGLISH_FUNCTION_WORDS.has(word)).length;
+  const strongEnglish = words.filter((word) => ENGLISH_FUNCTION_WORDS.has(word) && !WEAK_ENGLISH_WORDS.has(word)).length;
   const foreignHits = words.filter((word) => FOREIGN_FUNCTION_WORDS.has(word)).length;
-  if (foreignHits > 0 && foreignHits >= englishHits) return false;
-  if (words.length >= 2 && englishHits === 0) return false;
-  if (englishHits === 0 && foreignHits > 0) return false;
+  if (foreignHits > 0 && foreignHits >= strongEnglish) return false;
+  if (words.length < 5 && !ENGLISH_QUESTION.test(value)) return false;
+  if (strongEnglish === 0 && words.length < 6) return false;
+  if (englishHits === 0) return false;
   return true;
 }
 const ALLOWED_ANALYSIS_MODELS = new Set(
@@ -837,6 +842,8 @@ Voice:
 - Write like a real human talking: conversational US English, American spelling, contractions, natural rhythm. Display it on screen only.
 - Never write Hindi or any other language. US English only.
 - If the transcript is not a real English question, answer only: I didn't catch a clear English question. Press Listen again.
+- Never translate foreign phrases. Never add a Contextual Explanation. Never title the question "Respond to".
+- The question field must be the speaker's English words, not a coach label.
 - Allowed openers: "Yeah", "Yeah that's a nice one", "So basically", "Right, so", "Honestly", or just start the answer.
 - Example: "Yeah that's a good one actually — so the dataflow is pretty simple. Events land in ADLS, Autoloader picks them up, we run bronze to silver to gold, and late records get merged with a watermark so the dashboard stays correct."
 - Forbidden openers: "Certainly", "Great question", "As a data engineer with X years", "Based on the information provided", "As an AI".
@@ -853,7 +860,7 @@ When they ask for code/SQL/PySpark:
 
 Output JSON only:
 {
-  "question": "Concise label ≤60 chars",
+  "question": "The speaker's English question, ≤60 chars",
   "questionType": "${questionType}",
   "recommendedAnswer": "The on-screen answer in a natural human tone",
   "answer": "The on-screen answer in a natural human tone",

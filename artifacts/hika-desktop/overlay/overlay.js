@@ -76,9 +76,13 @@ let sessionStarting = false;
 let sessionEpoch = 0;
 let captureGeneration = 0;
 let listenPeakLevel = 0;
+let listenMicPeak = 0;
+let listenMeetingPeak = 0;
 let listenStartedAt = 0;
 let mixSources = [];
 let meterStreams = [];
+let micCapture = null;
+let meetingCapture = null;
 
 function markRealtimeMetric(name) {
   const now = performance.now();
@@ -416,7 +420,7 @@ function setListeningUI(listening) {
   if (micLabel) micLabel.textContent = listening ? "Stop" : "Listen";
   if (micHint) {
     micHint.textContent = listening
-      ? "Hearing meeting + your mic"
+      ? "Capturing English speech"
       : "Meeting or your mic";
   }
   if (recIndicator) recIndicator.hidden = !listening;
@@ -483,9 +487,11 @@ async function uploadDocuments(files, listElement) {
 // ── Mic source selector ────────────────────────────────────────────────────────
 const LOOPBACK_MIC = /stereo mix|what u hear|loopback|cable (in|out)|vb-audio|voicemeeter|virtual cable|hdmi|display audio|monitor of/i;
 const COMMS_MIC = /communications/i;
-const HALLUCINATED_TRANSCRIPT = /thanks for watching|thank you for watching|please subscribe|the boy ran quickly|\[music\]|\[silence\]|rewrite:|clarifying:|greeting:|translation:|subtitle:/i;
-const ENGLISH_FUNCTION_WORDS = new Set(["the","a","an","is","are","was","were","you","i","we","they","to","of","and","in","that","it","for","on","with","this","have","be","what","how","why","can","do","does","tell","me","about","your","my","so","yeah","okay","ok","like","just","when","if","or","not","but","from","at","as","would","could","should","will","there","here","please","yes","no","right","well","hello","hi","hey"]);
-const FOREIGN_FUNCTION_WORDS = new Set(["alsof","hemel","het","een","van","niet","jij","jullie","und","der","die","das","ich","nicht","que","para","como","esto","esta","les","des","une","pas","avec","oui","el","los","las","por","una","ist","che","per","con","kya","hai","aap","kaise","nahi","nahin","haan","theek","acha","accha","bhai","kyun","kyon","mera","meri","tum","hum","kaun","kab","kahan","woh","yeh","aur","itu","bagus","sekali","saya","tidak","yang","untuk","ada","ini","hallo","wie","geht","dir","nuk","kuptoj"]);
+const HALLUCINATED_TRANSCRIPT = /thanks for watching|thank you for watching|please subscribe|the boy ran quickly|\[music\]|\[silence\]|rewrite:|clarifying:|greeting:|translation:|subtitle:|respond to /i;
+const ENGLISH_QUESTION = /\b(what|why|how|when|where|who|which|tell|explain|describe|walk|can you|could you|would you)\b/i;
+const ENGLISH_FUNCTION_WORDS = new Set(["the","a","an","is","are","was","were","you","i","we","they","to","of","and","in","that","it","for","on","with","this","have","be","what","how","why","can","do","does","tell","me","about","your","my","so","yeah","okay","ok","like","just","when","if","or","not","but","from","at","as","would","could","should","will","there","here","please","yes","no","right","well","hello","hi","hey","explain"]);
+const WEAK_ENGLISH_WORDS = new Set(["a","an","i","no","ok","to","or"]);
+const FOREIGN_FUNCTION_WORDS = new Set(["alsof","hemel","het","een","van","niet","jij","jullie","und","der","die","das","ich","nicht","que","para","como","esto","esta","les","des","une","pas","avec","oui","el","los","las","por","una","ist","che","per","con","kya","hai","aap","kaise","nahi","nahin","haan","theek","acha","accha","bhai","kyun","kyon","mera","meri","tum","hum","kaun","kab","kahan","woh","yeh","aur","itu","bagus","sekali","saya","tidak","yang","untuk","ada","ini","hallo","wie","geht","dir","nuk","kuptoj","tardo","diario","kocham","bueno","gracias","hola","porque","pero","muy","aqui","ahora"]);
 
 function looksLikeUsEnglish(text) {
   const value = String(text || "").replace(/\s+/g, " ").trim();
@@ -493,12 +499,14 @@ function looksLikeUsEnglish(text) {
   if (/[\u0900-\u097F\u0980-\u09FF\u0A00-\u0A7F\u0A80-\u0AFF\u0B00-\u0B7F\u0C00-\u0C7F\u0C80-\u0CFF\u0D00-\u0D7F]/.test(value)) return false;
   if (HALLUCINATED_TRANSCRIPT.test(value)) return false;
   const words = value.toLowerCase().replace(/[^a-z'\s]/g, " ").split(/\s+/).filter(Boolean);
-  if (!words.length) return false;
+  if (words.length < 3) return false;
   const englishHits = words.filter((word) => ENGLISH_FUNCTION_WORDS.has(word)).length;
+  const strongEnglish = words.filter((word) => ENGLISH_FUNCTION_WORDS.has(word) && !WEAK_ENGLISH_WORDS.has(word)).length;
   const foreignHits = words.filter((word) => FOREIGN_FUNCTION_WORDS.has(word)).length;
-  if (foreignHits > 0 && foreignHits >= englishHits) return false;
-  if (words.length >= 2 && englishHits === 0) return false;
-  if (englishHits === 0 && foreignHits > 0) return false;
+  if (foreignHits > 0 && foreignHits >= strongEnglish) return false;
+  if (words.length < 5 && !ENGLISH_QUESTION.test(value)) return false;
+  if (strongEnglish === 0 && words.length < 6) return false;
+  if (englishHits === 0) return false;
   return true;
 }
 
@@ -930,6 +938,10 @@ function stopCaptureImmediate() {
   clearInterval(chunkTimer);
   chunkTimer = null;
   stopRealtimeVoice(true);
+  discardSourceRecorder(micCapture);
+  discardSourceRecorder(meetingCapture);
+  micCapture = null;
+  meetingCapture = null;
   const recorder = mediaRecorder;
   mediaRecorder = null;
   if (recorder) {
@@ -1025,33 +1037,52 @@ async function toggleRecording() {
   if (isRecording) await stopRecording(); else await startRecording();
 }
 
-function startHttpTranscriptRecorder(stream) {
-  const generation = captureGeneration;
-  const epoch = sessionEpoch;
-  const recorderOptions = mimeType ? { mimeType, audioBitsPerSecond: 128000 } : undefined;
+function createSourceRecorder(stream) {
+  if (!hasLiveAudio(stream)) return null;
+  const track = stream.getAudioTracks()[0];
+  track.enabled = true;
+  const recordStream = new MediaStream([typeof track.clone === "function" ? track.clone() : track]);
+  let recorder;
   try {
-    mediaRecorder = new MediaRecorder(stream, recorderOptions);
+    recorder = new MediaRecorder(recordStream, mimeType ? { mimeType, audioBitsPerSecond: 128000 } : undefined);
   } catch {
-    mediaRecorder = new MediaRecorder(stream);
+    recorder = new MediaRecorder(recordStream);
   }
-  audioChunks = [];
-  mediaRecorder.ondataavailable = (event) => {
-    if (event.data && event.data.size > 0) audioChunks.push(event.data);
+  const chunks = [];
+  recorder.ondataavailable = (event) => {
+    if (event.data && event.data.size > 0) chunks.push(event.data);
   };
+  recorder.start();
+  return { recorder, chunks, stream: recordStream };
+}
 
-  mediaRecorder.onstop = async () => {
-    if (sessionEnding || generation !== captureGeneration || epoch !== sessionEpoch) return;
-    const blob = new Blob(audioChunks, { type: mimeType });
-    audioChunks = [];
-    if (blob.size < 600) {
-      await finishListenAndAnswer("");
+function stopSourceRecorder(handle) {
+  return new Promise((resolve) => {
+    if (!handle?.recorder) {
+      resolve(new Blob([], { type: mimeType }));
       return;
     }
-    const text = await transcribeBlob(blob);
-    await finishListenAndAnswer(text);
-  };
+    const finish = () => {
+      try { handle.stream?.getTracks?.().forEach((track) => track.stop()); } catch { /* ignore */ }
+      resolve(new Blob(handle.chunks || [], { type: mimeType }));
+    };
+    if (handle.recorder.state === "inactive") {
+      finish();
+      return;
+    }
+    handle.recorder.onstop = finish;
+    try { handle.recorder.stop(); } catch { finish(); }
+  });
+}
 
-  mediaRecorder.start();
+function discardSourceRecorder(handle) {
+  if (!handle?.recorder) return;
+  handle.recorder.ondataavailable = null;
+  handle.recorder.onstop = null;
+  try {
+    if (handle.recorder.state !== "inactive") handle.recorder.stop();
+  } catch { /* ignore */ }
+  try { handle.stream?.getTracks?.().forEach((track) => track.stop()); } catch { /* ignore */ }
 }
 
 async function startRecording() {
@@ -1062,27 +1093,26 @@ async function startRecording() {
     pendingAnalyzeOnStop = false;
     answerOnStopLock = false;
     listenPeakLevel = 0;
+    listenMicPeak = 0;
+    listenMeetingPeak = 0;
     listenStartedAt = Date.now();
     if (listenFinalizeTimer) {
       clearTimeout(listenFinalizeTimer);
       listenFinalizeTimer = null;
     }
     statusDot.textContent = "● Connecting microphone";
-    const stream = await buildRecordingStream();
+    const sources = await buildRecordingStream();
     if (epoch !== sessionEpoch || sessionEnding || !sessionId) {
-      stream?.getTracks?.().forEach((track) => track.stop());
       stopAudioPipeline();
       setListeningUI(false);
       return;
     }
-    const track = stream.getAudioTracks()[0];
-    if (!track || track.readyState !== "live") throw new Error("No active microphone track was found.");
-    track.enabled = true;
+    micCapture = createSourceRecorder(sources.mic);
+    meetingCapture = createSourceRecorder(sources.meeting);
+    if (!micCapture && !meetingCapture) throw new Error("No active microphone track was found.");
     warnedSilentMic = false;
     silentListenFrames = 0;
-    const captureName = "meeting + mic";
-    const recordTrack = typeof track.clone === "function" ? track.clone() : track;
-    startHttpTranscriptRecorder(new MediaStream([recordTrack]));
+    const captureName = sources.meeting && sources.mic ? "meeting or mic" : (sources.mic ? "your mic" : "meeting");
 
     isRecording = true;
     setListeningUI(true);
@@ -1095,13 +1125,9 @@ async function startRecording() {
     latestUtterance = "";
     transcriptReadyForAsk = false;
     setLiveBadge(`● LIVE · ${captureName}`, "live");
-
-    if (useRealtimeVoice && !forceHttpFallback) {
-      void startRealtimeVoice(stream);
-    }
   } catch (err) {
     const message = err instanceof Error ? err.message : "Audio capture failed.";
-    alert(`Could not start listening.\n\n${message}\n\nAllow the microphone. For a live call, keep Zoom/Teams/Meet playing. For testing, speak into the mic, then Stop.`);
+    alert(`Could not start listening.\n\n${message}\n\nAllow the microphone. Speak a full English question, then Stop.`);
     statusDot.textContent = "● Mic unavailable";
     statusDot.className = "status-dot";
     setListeningUI(false);
@@ -1122,15 +1148,26 @@ async function stopRecording() {
   setLiveBadge("Capturing", "captured");
 
   stopRealtimeVoice(true);
-
-  if (mediaRecorder && mediaRecorder.state !== "inactive") {
-    mediaRecorder.stop();
-    mediaRecorder.stream.getTracks().forEach((track) => track.stop());
-  } else {
-    await finishListenAndAnswer("");
-  }
-  mediaRecorder = null;
+  const generation = captureGeneration;
+  const epoch = sessionEpoch;
+  const micHandle = micCapture;
+  const meetingHandle = meetingCapture;
+  micCapture = null;
+  meetingCapture = null;
+  const [micBlob, meetingBlob] = await Promise.all([
+    stopSourceRecorder(micHandle),
+    stopSourceRecorder(meetingHandle),
+  ]);
   stopAudioPipeline();
+  if (sessionEnding || generation !== captureGeneration || epoch !== sessionEpoch) return;
+
+  const preferMic = listenMicPeak >= listenMeetingPeak;
+  const primary = preferMic ? micBlob : meetingBlob;
+  const secondary = preferMic ? meetingBlob : micBlob;
+  let text = "";
+  if (primary.size >= 600) text = await transcribeBlob(primary);
+  if (!text && secondary.size >= 600) text = await transcribeBlob(secondary);
+  await finishListenAndAnswer(text);
 }
 
 function stopRealtimeVoice(closedByUser = true) {
@@ -1169,7 +1206,7 @@ async function finishListenAndAnswer(sourceText) {
     setLiveBadge("No speech");
     statusDot.textContent = "● Ready";
     statusDot.className = "status-dot";
-    showToast("No speech caught. Speak into the mic, or keep the meeting playing, then Listen again.");
+    showToast("Didn't catch a clear English question. Say the full question, then Stop.");
     answerOnStopLock = false;
     return;
   }
@@ -1409,8 +1446,10 @@ function startMeters() {
     if (meterMicFill) meterMicFill.style.width = `${Math.max(2, Math.round(micLevel * 100))}%`;
     if (meterClientFill) meterClientFill.style.width = `${Math.max(2, Math.round(clientLevel * 100))}%`;
     if (isRecording) {
+      listenMicPeak = Math.max(listenMicPeak, micLevel);
+      listenMeetingPeak = Math.max(listenMeetingPeak, clientLevel);
       listenPeakLevel = Math.max(listenPeakLevel, micLevel, clientLevel);
-      if (micLevel < 0.02) silentListenFrames += 1;
+      if (micLevel < 0.02 && clientLevel < 0.02) silentListenFrames += 1;
       else {
         silentListenFrames = 0;
         warnedSilentMic = false;
@@ -1610,8 +1649,9 @@ function connectMeter(stream, analyserTarget) {
 async function buildRecordingStream() {
   const meeting = await getMeetingAudioStream().catch(() => null);
   const mic = await getMicStream().catch(() => null);
-  const streams = [meeting, mic].filter((stream) => hasLiveAudio(stream));
-  if (!streams.length) throw new Error("Allow the microphone so Hikanest can hear you or the meeting.");
+  if (!hasLiveAudio(meeting) && !hasLiveAudio(mic)) {
+    throw new Error("Allow the microphone so Hikanest can hear you or the meeting.");
+  }
 
   const Ctx = window.AudioContext || window.webkitAudioContext;
   if (!audioContext || audioContext.state === "closed") audioContext = new Ctx();
@@ -1633,20 +1673,9 @@ async function buildRecordingStream() {
   if (!micAnalyser) micAnalyser = clientAnalyser;
   if (!clientAnalyser) clientAnalyser = micAnalyser;
 
-  let output = streams[0];
-  if (streams.length > 1) {
-    const dest = audioContext.createMediaStreamDestination();
-    for (const stream of streams) {
-      const source = audioContext.createMediaStreamSource(stream);
-      source.connect(dest);
-      mixSources.push(source);
-    }
-    output = dest.stream;
-  }
-
-  mixedStream = output;
+  mixedStream = mic || meeting;
   startMeters();
-  return output;
+  return { meeting, mic };
 }
 
 function stopAudioPipeline() {
@@ -1727,7 +1756,7 @@ async function analyze(utterance) {
     sessionGuidance ? `Session guidance: ${sessionGuidance}` : "",
     codeRequest
       ? "Return complete executable code first, then a short spoken explanation."
-      : "Write the answer on screen as this person, in natural conversational US English. First person. American spelling. Never use Hindi or any other language.",
+      : "Answer this exact US English question on screen. Do not invent another topic. Do not add a contextual explanation. Do not title it Respond to.",
     `Timestamp: ${new Date().toISOString()}`,
   ].filter(Boolean).join("\n");
 
