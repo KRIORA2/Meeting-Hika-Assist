@@ -16,6 +16,7 @@ const SessionDetail = lazy(() => import("@/pages/SessionDetail"));
 const Documents = lazy(() => import("@/pages/Documents"));
 const Settings = lazy(() => import("@/pages/Settings"));
 const Pricing = lazy(() => import("@/pages/Pricing"));
+const Privacy = lazy(() => import("@/pages/Privacy"));
 const DesktopConnect = lazy(() => import("@/pages/DesktopConnect"));
 const StealthOverlay = lazy(() => import("@/pages/StealthOverlay"));
 const NotFound = lazy(() => import("@/pages/not-found"));
@@ -72,6 +73,7 @@ function Router() {
       {/* Public landing page — no shell */}
       <Route path="/login" component={Login} />
       <Route path="/pricing" component={Pricing} />
+      <Route path="/privacy" component={Privacy} />
       <Route path="/desktop-connect" component={DesktopConnect} />
       <Route path="/install" component={ProtectedInstall} />
       <Route path="/" component={HomeRoute} />

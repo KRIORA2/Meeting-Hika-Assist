@@ -495,6 +495,7 @@ export default function Landing() {
             <a href="#features" className="hover:text-white/60 transition-colors">Features</a>
             <a href="#how-it-works" className="hover:text-white/60 transition-colors">How it works</a>
             <a href="#docs" className="hover:text-white/60 transition-colors">Docs</a>
+            <button onClick={() => navigate("/privacy")} className="hover:text-white/60 transition-colors">Privacy</button>
             {isSignedIn && <a href="#install" className="hover:text-white/60 transition-colors">Install</a>}
           </div>
           <button onClick={() => navigate(isSignedIn ? "/session" : "/login?next=%2Fsession")}

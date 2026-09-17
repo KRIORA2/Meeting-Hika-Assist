@@ -257,6 +257,9 @@ async function init() {
     closeAccountMenu();
     void window.hikaElectron?.openExternal(`${webAppUrl}/dashboard`);
   });
+  $("open-pricing-btn")?.addEventListener("click", () => {
+    void window.hikaElectron?.openExternal(`${webAppUrl}/pricing`);
+  });
   $("menu-logout-btn")?.addEventListener("click", async () => {
     closeAccountMenu();
     try {
@@ -425,6 +428,11 @@ function setListeningUI(listening) {
   }
   if (recIndicator) recIndicator.hidden = !listening;
   liveTxEl.classList.toggle("listening", listening);
+  if (liveTxText) {
+    liveTxText.placeholder = listening
+      ? "Listening — their words appear here as they speak…"
+      : "Press Listen when the other person asks. Their words appear here in US English.";
+  }
   if (listening) setLiveBadge("● LIVE", "live");
 }
 
@@ -869,8 +877,10 @@ async function handleStart() {
   const jobContext = (jobPostUrl?.value || "").trim();
   const languageContext = "Write the transcript and every answer in US English with American spelling. Never use Hindi or any other language.";
   sessionGuidance = [
-    "Write Parakeet-style on-screen answers: one spoken opener, then 3 to 5 short • bullets a data engineer can glance at and say.",
-    "First person. No headings, no explanation boxes, no inventory confirmation, no REST API or Terraform unless they explicitly asked for code.",
+    "Write on-screen answers like a senior engineer speaking in the interview: conversational paragraphs, not bullet notes. No Yeah. Do not force 'In my current project' on every question.",
+    "Every question — technical, scenario, access, behavioral — answer as an experienced data engineer: what it is, why it happens, how I handle it at work.",
+    "First person. No headings, no textbook dump, no REST/SCIM/placeholder Python unless they asked for that script.",
+    "If they asked for a query or script: full real production SQL/PySpark, then a short spoken explanation of that query under it.",
     selectedSessionMode === "interview"
       ? "This is a live interview. Answer the interviewer as the candidate — direct talking points, not a lecture."
       : "This is a live work meeting. Answer as this person talking to teammates — short, decisive talking points.",
@@ -1039,7 +1049,7 @@ async function toggleRecording() {
   if (isRecording) await stopRecording(); else await startRecording();
 }
 
-function createSourceRecorder(stream) {
+function createSourceRecorder(stream, sourceId) {
   if (!hasLiveAudio(stream)) return null;
   const track = stream.getAudioTracks()[0];
   track.enabled = true;
@@ -1053,9 +1063,30 @@ function createSourceRecorder(stream) {
   const chunks = [];
   recorder.ondataavailable = (event) => {
     if (event.data && event.data.size > 0) chunks.push(event.data);
+    if (isRecording && event.data && event.data.size >= 900) {
+      void ingestLiveSlice(event.data, sourceId);
+    }
   };
-  recorder.start();
-  return { recorder, chunks, stream: recordStream };
+  try {
+    recorder.start(2000);
+  } catch {
+    recorder.start();
+  }
+  return { recorder, chunks, stream: recordStream, sourceId };
+}
+
+async function ingestLiveSlice(blob, sourceId) {
+  if (!isRecording || isTranscribing) return;
+  const peak = sourceId === "mic" ? listenMicPeak : listenMeetingPeak;
+  const other = sourceId === "mic" ? listenMeetingPeak : listenMicPeak;
+  if (peak < 0.04) return;
+  if (other > peak * 1.35) return;
+  const text = await transcribeBlob(blob, { preview: true });
+  if (!isRecording || !text) return;
+  const merged = appendCapturedTranscript(liveTxText.value, text);
+  if (!merged) return;
+  setTranscriptDraft(merged);
+  setLiveBadge("● LIVE", "live");
 }
 
 function stopSourceRecorder(handle) {
@@ -1109,8 +1140,8 @@ async function startRecording() {
       setListeningUI(false);
       return;
     }
-    micCapture = createSourceRecorder(sources.mic);
-    meetingCapture = createSourceRecorder(sources.meeting);
+    micCapture = createSourceRecorder(sources.mic, "mic");
+    meetingCapture = createSourceRecorder(sources.meeting, "meeting");
     if (!micCapture && !meetingCapture) throw new Error("No active microphone track was found.");
     warnedSilentMic = false;
     silentListenFrames = 0;
@@ -1145,9 +1176,14 @@ async function stopRecording() {
   isRecording = false;
   pendingAnalyzeOnStop = true;
   setListeningUI(false);
-  statusDot.textContent = "● Capturing";
-  statusDot.className = "status-dot";
-  setLiveBadge("Capturing", "captured");
+  const preview = (liveTxText.value || "").replace(/\s+/g, " ").trim();
+  if (preview) {
+    statusDot.textContent = "● Captured";
+    setLiveBadge("Captured", "captured");
+  } else {
+    statusDot.textContent = "● Transcribing";
+    setLiveBadge("Transcribing", "captured");
+  }
 
   stopRealtimeVoice(true);
   const generation = captureGeneration;
@@ -1163,12 +1199,18 @@ async function stopRecording() {
   stopAudioPipeline();
   if (sessionEnding || generation !== captureGeneration || epoch !== sessionEpoch) return;
 
+  await waitForTranscriptionIdle(4000);
+  if (preview && looksLikeUsEnglish(preview) && preview.split(/\s+/).length >= 6) {
+    await finishListenAndAnswer(preview);
+    return;
+  }
   const preferMic = listenMicPeak >= listenMeetingPeak;
   const primary = preferMic ? micBlob : meetingBlob;
   const secondary = preferMic ? meetingBlob : micBlob;
   let text = "";
   if (primary.size >= 600) text = await transcribeBlob(primary);
   if (!text && secondary.size >= 600) text = await transcribeBlob(secondary);
+  if (!text && preview && looksLikeUsEnglish(preview)) text = preview;
   await finishListenAndAnswer(text);
 }
 
@@ -1715,8 +1757,9 @@ function stopAudioPipeline() {
 }
 
 // ── Transcription ─────────────────────────────────────────────────────────────
-async function transcribeBlob(blob) {
-  await waitForTranscriptionIdle(6000);
+async function transcribeBlob(blob, { preview = false } = {}) {
+  if (!preview) await waitForTranscriptionIdle(6000);
+  else if (isTranscribing) return "";
   isTranscribing = true;
 
   try {
@@ -1725,6 +1768,7 @@ async function transcribeBlob(blob) {
     const res = await api("POST", "/api/openai/transcribe", {
       audioBase64: b64,
       mimeType: blob.type,
+      preview,
     });
     const text = (res.transcript || "").replace(/\s+/g, " ").trim();
     return isHallucinatedTranscript(text) ? "" : text;
@@ -1757,8 +1801,8 @@ async function analyze(utterance) {
     `ANSWER THIS: "${utterance}"`,
     sessionGuidance ? `Session guidance: ${sessionGuidance}` : "",
     codeRequest
-      ? "They explicitly asked for code. Put runnable code after a short spoken line."
-      : "Speak like Parakeet: one opener line, then 3 to 5 short • bullets. First person as a real data engineer. No headings. No REST API unless they asked for code.",
+      ? "They asked for a query or script. Return a complete real production query, no placeholders, then a short spoken explanation of what that query does."
+      : "Every question: answer as an experienced data engineer. What it is, why it happens, how I handle it at work. One opener, then 3 to 5 short • bullets. No REST/SCIM unless they asked for that script.",
     `Timestamp: ${new Date().toISOString()}`,
   ].filter(Boolean).join("\n");
 
@@ -1784,6 +1828,7 @@ async function analyze(utterance) {
       confidence:  result.confidence || "medium",
       suggestions: result.suggestions || [],
       sections:    result.sections   || [],
+      keyPoints:   result.keyPoints  || [],
       timestamp:   new Date(),
     };
 
@@ -1947,9 +1992,13 @@ function normalizeComparableText(value) {
     .toLowerCase();
 }
 
+function isPlaceholderDump(text) {
+  return /DATABRICKS_INSTANCE|<your-|personal-access-token|preview\/scim/i.test(String(text || ""));
+}
+
 function isCodeLike(text) {
   const t = String(text || "").trim();
-  if (!t) return false;
+  if (!t || isPlaceholderDump(t)) return false;
   if (t.includes("```")) return true;
   if (/^(select|with|insert|update|delete|create table|alter|drop|import\s+\w+|from\s+\w+\s+import|def\s+\w+\s*\(|spark\s*=)/i.test(t)) return true;
   return false;
@@ -1990,75 +2039,63 @@ function matchesLanguageFilter(ins) {
   });
 }
 
-function toParakeetScript(text) {
+function toSpokenAnswer(text) {
   const cleaned = String(text || "")
     .replace(/```[\s\S]*?```/g, " ")
     .replace(/^\s*#{1,6}\s+.+$/gm, "")
     .replace(/^\s*\*\*[^*]+\*\*\s*:?\s*$/gm, "")
-    .replace(/^\s*(contextual explanation|cluster inventory confirmation|explanation|interview tip|follow-?up|details|notes|what is data skew.*)\s*:?\s*$/gim, "")
+    .replace(/^\s*(contextual explanation|cluster inventory confirmation|explanation|interview tip|follow-?up|details|notes|definition|implementation|best practices|what is data skew.*)\s*:?\s*$/gim, "")
     .replace(/^\s*[A-Z][A-Z0-9 /,&:\-]{10,}\s*$/gm, "")
     .replace(/\*\*/g, "")
     .trim();
 
-  let lines = cleaned
+  const lines = cleaned
     .split(/\n+/)
+    .flatMap((line) => line.split("•"))
     .map((line) => line.replace(/^\s*(?:[-*]|•)\s+/, "").replace(/\s+/g, " ").trim())
+    .filter(Boolean)
+    .map((line) => line.replace(/^(yeah[,.]?\s+|so basically[,.]?\s+|right,? so[,.]?\s+)/i, "").trim())
     .filter(Boolean);
 
-  if (lines.length < 3 && /•/.test(cleaned)) {
-    lines = cleaned
-      .split("•")
-      .map((line) => line.replace(/\s+/g, " ").trim())
-      .filter(Boolean);
+  if (!lines.length) return "";
+  if (lines.length === 1) return lines[0];
+  if (!/•|^\s*[-*]\s+\S/m.test(cleaned)) {
+    return lines.join("\n\n");
   }
+  const rest = lines.slice(1).map((line) => /[.!?]$/.test(line) ? line : `${line}.`);
+  const opener = /[.!?]$/.test(lines[0]) ? lines[0] : `${lines[0]}.`;
+  return [opener, ...rest].join(" ").replace(/\s+/g, " ").trim();
+}
 
-  if (lines.length < 3) {
-    const sentences = cleaned
-      .replace(/\s+/g, " ")
-      .split(/(?<=[.!?])\s+/)
-      .map((sentence) => sentence.trim())
-      .filter((sentence) => sentence.length > 8);
-    if (sentences.length >= 3) lines = sentences;
-  }
-
-  if (!lines.length) return [];
-  return lines.map((line, index) => line.replace(/^[•\-]\s*/, "").replace(index === 0 ? /$/ : /[.]+$/, ""));
+function toParakeetScript(text) {
+  const spoken = toSpokenAnswer(text);
+  return spoken ? [spoken] : [];
 }
 
 function spokenAnswerText(text) {
-  const lines = toParakeetScript(text);
-  if (!lines.length) return "";
-  if (lines.length === 1) return lines[0];
-  return [lines[0], ...lines.slice(1).map((line) => `• ${line}`)].join("\n");
+  return toSpokenAnswer(text);
+}
+
+function collectKeyPoints(ins, spoken) {
+  const fromApi = Array.isArray(ins.keyPoints) ? ins.keyPoints.map((p) => String(p || "").trim()).filter(Boolean) : [];
+  if (fromApi.length) return fromApi.slice(0, 5);
+  const names = ["Unity Catalog", "Auto Loader", "Event Hubs", "Power BI", "Key Vault", "Delta Lake", "PySpark", "Databricks", "ADLS Gen2", "ADLS", "ADF", "Kafka", "Spark UI", "Bronze/Silver/Gold"];
+  const hits = [];
+  const escape = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  for (const name of names) {
+    if (new RegExp(`\\b${escape(name)}\\b`, "i").test(spoken) && !hits.includes(name)) hits.push(name);
+    if (hits.length >= 5) break;
+  }
+  return hits;
 }
 
 function renderAnswerBlocks(ins) {
   const wrap = document.createElement("div");
-  const rawAnswer = String(ins.answer || "").trim();
+  const rawAnswer = isPlaceholderDump(ins.answer) ? "" : String(ins.answer || "").trim();
   const blocks = collectCodeBlocks(ins).filter((b) => isCodeLike(b.content));
-  const lines = isCodeLike(rawAnswer) ? [] : toParakeetScript(rawAnswer);
-  const answer = spokenAnswerText(rawAnswer);
-
-  if (lines.length) {
-    const aWrap = document.createElement("div");
-    aWrap.className = "ai-a-wrap";
-    const aText = document.createElement("div");
-    aText.className = "ai-a";
-    lines.forEach((line, index) => {
-      const row = document.createElement("div");
-      if (index === 0) {
-        row.className = "ai-a-opener";
-        row.textContent = line;
-      } else {
-        row.className = "ai-a-point";
-        row.textContent = `• ${line}`;
-      }
-      aText.appendChild(row);
-    });
-    aWrap.appendChild(aText);
-    aWrap.appendChild(makeCopyBtn(answer));
-    wrap.appendChild(aWrap);
-  }
+  const spokenSource = blocks.length && isCodeLike(rawAnswer) ? "" : rawAnswer;
+  const spoken = spokenAnswerText(spokenSource);
+  const keys = collectKeyPoints(ins, spoken);
 
   blocks.forEach((b) => {
     const block = document.createElement("div");
@@ -2068,7 +2105,31 @@ function renderAnswerBlocks(ins) {
     wrap.appendChild(block);
   });
 
-  if (!lines.length && !blocks.length) {
+  if (spoken) {
+    const row = document.createElement("div");
+    row.className = keys.length ? "ai-answer-row" : "ai-a-wrap";
+    const spokenCol = document.createElement("div");
+    spokenCol.className = "ai-a-wrap ai-spoken-col";
+    const aText = document.createElement("div");
+    aText.className = "ai-a ai-spoken";
+    aText.textContent = spoken;
+    spokenCol.appendChild(aText);
+    const pill = document.createElement("div");
+    pill.className = "ai-speaking";
+    pill.textContent = "● Ready to speak";
+    spokenCol.appendChild(pill);
+    spokenCol.appendChild(makeCopyBtn(spoken));
+    row.appendChild(spokenCol);
+    if (keys.length) {
+      const panel = document.createElement("aside");
+      panel.className = "ai-keys";
+      panel.innerHTML = `<p class="ai-keys-title">Key points</p>${keys.map((k) => `<p class="ai-key">✓ ${escHtml(k)}</p>`).join("")}`;
+      row.appendChild(panel);
+    }
+    wrap.appendChild(row);
+  }
+
+  if (!spoken && !blocks.length) {
     const empty = document.createElement("div");
     empty.className = "ai-a";
     empty.textContent = "No answer available.";
@@ -2082,6 +2143,14 @@ function showToast(msg) {
   copyToast.textContent = msg;
   copyToast.classList.add("show");
   setTimeout(() => copyToast.classList.remove("show"), 1800);
+}
+
+function showOutOfCredits() {
+  const banner = $("credits-banner");
+  if (banner) banner.hidden = false;
+  micBtn.disabled = true;
+  askBtn.disabled = true;
+  showToast("Out of credits — open Pricing to continue.");
 }
 
 // ── API helper ────────────────────────────────────────────────────────────────
@@ -2098,7 +2167,7 @@ async function api(method, path, body) {
     error.status = res.status;
     if (res.status === 402) {
       if (typeof payload?.credits === "number") setCredits(payload.credits);
-      showToast(serverMessage || "Not enough credits. Open Pricing in the web app.");
+      showOutOfCredits();
     }
     throw error;
   }

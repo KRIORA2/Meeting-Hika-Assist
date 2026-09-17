@@ -32,23 +32,20 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Typecheck workspace
+        run: pnpm typecheck
+
+      - name: Verify answer quality
+        run: pnpm verify:answers
+
       - name: Build Web App (Frontend)
         run: pnpm --filter @workspace/hika run build
         
       - name: Build Desktop App & Publish
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # -------------------------------------------------------------
-          # CODE SIGNING SETUP (Required for a professional installation)
-          # -------------------------------------------------------------
-          # To stop the blue "Windows Protected your PC" SmartScreen warning,
-          # you must purchase a Code Signing Certificate (e.g. from SSL.com).
-          # Once you have it, export it as base64, and add it to your 
-          # GitHub Repository Secrets as CSC_LINK, and the password as 
-          # CSC_KEY_PASSWORD. Uncomment the lines below once added.
-          # -------------------------------------------------------------
-          # CSC_LINK: ${{ secrets.CSC_LINK }}
-          # CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
         run: pnpm --filter @workspace/hika-desktop run dist
 
       - name: Upload Installer to Release

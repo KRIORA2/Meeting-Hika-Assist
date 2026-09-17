@@ -56,6 +56,7 @@ type Insight = {
   suggestions: string[];
   confidence: string;
   sections: AISection[];
+  keyPoints?: string[];
   timestamp: Date;
 };
 
@@ -209,7 +210,7 @@ function InsightCard({ insight }: { insight: Insight }) {
         </div>
       )}
       <div className="text-sm leading-relaxed whitespace-pre-wrap select-text text-slate-100">
-        <InsightAnswer answer={insight.answer} sections={insight.sections} className="text-slate-100" />
+        <InsightAnswer answer={insight.answer} sections={insight.sections} keyPoints={insight.keyPoints} className="text-slate-100" />
       </div>
       <div className="self-end opacity-80 group-hover:opacity-100 transition-opacity">
         <CopyButton text={insight.answer} />
@@ -776,7 +777,7 @@ function PiPContent({
                 )}
                 {insights.length > 0 && (
                   <div className="whitespace-pre-wrap text-[14px] text-slate-100 leading-8" style={{ fontFamily: 'Inter, sans-serif' }}>
-                    <InsightAnswer answer={insights[0].answer} sections={insights[0].sections} className="text-slate-100" />
+                    <InsightAnswer answer={insights[0].answer} sections={insights[0].sections} keyPoints={insights[0].keyPoints} className="text-slate-100" />
                   </div>
                 )}
               </>
@@ -1013,7 +1014,7 @@ function PiPContent({
       sessionMode === "interview"
         ? "Interview: answer as the candidate, first person, like a real senior data engineer speaking on the call."
         : "Meeting: answer as this person talking to teammates. Decisive, current, first person.",
-      "Parakeet format: one spoken opener, then 3 to 5 short • bullets. First person. No headings. No REST API unless they asked for code.",
+      "Every question: experienced employee voice — what it is, why it happens, how I handle it at work. Opener plus 3 to 5 • bullets. Queries get real SQL plus a short explanation.",
     ].filter(Boolean).join("\n");
 
     const ctx = utterance
@@ -1058,6 +1059,9 @@ function PiPContent({
         suggestions: result.suggestions,
         confidence: result.confidence ?? "low",
         sections: (result.sections as AISection[] | undefined) ?? [],
+        keyPoints: Array.isArray((result as { keyPoints?: string[] }).keyPoints)
+          ? (result as { keyPoints?: string[] }).keyPoints
+          : [],
         timestamp: new Date(),
       };
       persistInsight(insight);
@@ -2055,7 +2059,7 @@ function PiPContent({
                           </span>
                         </div>
                         <div className="text-sm leading-relaxed text-slate-100">
-                          <InsightAnswer answer={latestInsight.answer} sections={latestInsight.sections} className="text-slate-100" />
+                          <InsightAnswer answer={latestInsight.answer} sections={latestInsight.sections} keyPoints={latestInsight.keyPoints} className="text-slate-100" />
                         </div>
                         {latestInsight.suggestions.length > 0 && (
                           <div className="mt-4 rounded-xl border border-white/10 bg-slate-950/40 p-3">

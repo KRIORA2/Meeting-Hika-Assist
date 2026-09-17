@@ -448,6 +448,32 @@ body {
   -webkit-app-region: no-drag;
   white-space: nowrap;
 }
+.credits-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin: 0 12px 8px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  border: 1px solid rgba(251,191,36,0.35);
+  background: rgba(251,191,36,0.1);
+  color: #fde68a;
+  font-size: 12px;
+  line-height: 1.4;
+}
+.credits-banner[hidden] { display: none !important; }
+.credits-banner button {
+  flex-shrink: 0;
+  border: 0;
+  border-radius: 8px;
+  padding: 6px 10px;
+  background: #fbbf24;
+  color: #1c1403;
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+}
 .credits-badge.low {
   background: rgba(251,191,36,0.12);
   border-color: rgba(251,191,36,0.35);
@@ -651,10 +677,51 @@ body {
   display: none;
 }
 .ai-a {
-  display: flex;
-  flex-direction: column;
-  gap: 7px;
+  display: block;
   padding: 2px 2px 10px;
+  font-size: 15px;
+  line-height: 1.55;
+  color: #f4f7ff;
+  font-weight: 500;
+  white-space: pre-wrap;
+}
+.ai-spoken { letter-spacing: 0.01em; }
+.ai-answer-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: flex-start;
+}
+.ai-spoken-col { flex: 1; min-width: 0; position: relative; }
+.ai-keys {
+  width: 132px;
+  flex-shrink: 0;
+  padding: 8px 10px;
+  border: 1px solid rgba(146,162,255,0.2);
+  border-radius: 10px;
+  background: rgba(109,125,255,0.08);
+}
+.ai-keys-title {
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: #9aa6c2;
+  margin-bottom: 6px;
+}
+.ai-key {
+  font-size: 11px;
+  line-height: 1.4;
+  color: #dce6ff;
+  margin: 0 0 4px;
+}
+.ai-speaking {
+  margin-top: 8px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #34d399;
 }
 .ai-a-opener {
   font-size: 17px;
@@ -664,12 +731,10 @@ body {
   letter-spacing: 0.01em;
   margin-bottom: 4px;
 }
-.ai-a-point {
-  font-size: 15px;
-  line-height: 1.45;
-  color: #dbe4f7;
-  font-weight: 450;
-  padding-left: 1px;
+.ai-a-explain {
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px solid rgba(255,255,255,0.08);
 }
 .ai-a-wrap {
   position: relative;

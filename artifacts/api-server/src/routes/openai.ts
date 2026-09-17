@@ -7,12 +7,24 @@ import path from "path";
 import pdfParse from "pdf-parse";
 import mammoth from "mammoth";
 import { readUserDocument, consumeCredits, grantCredits, CREDIT_COSTS } from "../lib/store";
+import {
+  extractKeyPoints,
+  isCodeIntent,
+  isProcessQuestion,
+  looksLikeCodeDump,
+  looksLikeUsEnglish,
+  scoreEmployeeAnswer,
+  stripCodeFences,
+  toSpokenAnswer,
+} from "../lib/answer-quality";
+import { CANDIDATE_IDENTITY, VOICE_EXAMPLES, SENIOR_ANSWER_LENS, matchingSubjects, subjectContext, detectSpeakMode, speakModeCue } from "../lib/interview-voice";
 
 const router = Router();
 
 async function takeCredits(req: Request, res: Response, amount: number) {
   const result = await consumeCredits(req.authUser!.id, amount);
   if (!result.ok) {
+    req.log.warn({ event: "credits.402", amount, credits: result.credits, path: req.path }, "Out of credits");
     res.status(402).json({
       error: "Not enough credits. Open Pricing in the web app to upgrade.",
       credits: result.credits,
@@ -30,44 +42,6 @@ const DEFAULT_REALTIME_TRANSCRIPTION_MODEL = process.env.OPENAI_REALTIME_TRANSCR
 const DEFAULT_REALTIME_NOISE_REDUCTION = process.env.OPENAI_REALTIME_NOISE_REDUCTION === "far_field" ? "far_field" : "near_field";
 const TRANSCRIPTION_PROMPT = "A clear American English question from a data engineering meeting.";
 
-const ENGLISH_QUESTION = /\b(what|why|how|when|where|who|which|tell|explain|describe|walk|can you|could you|would you)\b/i;
-const ENGLISH_FUNCTION_WORDS = new Set([
-  "the", "a", "an", "is", "are", "was", "were", "you", "i", "we", "they", "to", "of", "and", "in",
-  "that", "it", "for", "on", "with", "this", "have", "be", "what", "how", "why", "can", "do", "does",
-  "tell", "me", "about", "your", "my", "so", "yeah", "okay", "ok", "like", "just", "when", "if", "or",
-  "not", "but", "from", "at", "as", "would", "could", "should", "will", "there", "here", "please",
-  "yes", "no", "right", "well", "hello", "hi", "hey", "explain",
-]);
-const WEAK_ENGLISH_WORDS = new Set(["a", "an", "i", "no", "ok", "to", "or"]);
-const FOREIGN_FUNCTION_WORDS = new Set([
-  "alsof", "hemel", "het", "een", "van", "niet", "jij", "jullie", "und", "der", "die", "das", "ich",
-  "nicht", "que", "para", "como", "esto", "esta", "les", "des", "une", "pas", "avec", "oui",
-  "el", "los", "las", "por", "una", "sehr", "ist", "che", "per", "con", "kya", "hai", "aap",
-  "kaise", "nahi", "nahin", "haan", "theek", "acha", "accha", "bhai", "kyun", "kyon", "mera",
-  "meri", "tum", "hum", "kaun", "kab", "kahan", "woh", "yeh", "aur", "itu", "bagus", "sekali",
-  "saya", "tidak", "yang", "untuk", "ada", "ini", "hallo", "wie", "geht", "dir", "nuk", "kuptoj",
-  "tardo", "diario", "kocham", "bueno", "gracias", "hola", "porque", "pero", "muy", "aqui", "ahora",
-]);
-const HALLUCINATED_TRANSCRIPT = /thanks for watching|thank you for watching|please subscribe|the boy ran quickly|\[music\]|\[silence\]|rewrite:|clarifying:|greeting:|translation:|subtitle:|respond to /i;
-
-function looksLikeUsEnglish(text: string) {
-  const value = text.replace(/\s+/g, " ").trim();
-  if (!value) return false;
-  if (/[\u0900-\u097F\u0980-\u09FF\u0A00-\u0A7F\u0A80-\u0AFF\u0B00-\u0B7F\u0C00-\u0C7F\u0C80-\u0CFF\u0D00-\u0D7F]/.test(value)) {
-    return false;
-  }
-  if (HALLUCINATED_TRANSCRIPT.test(value)) return false;
-  const words = value.toLowerCase().replace(/[^a-z'\s]/g, " ").split(/\s+/).filter(Boolean);
-  if (words.length < 3) return false;
-  const englishHits = words.filter((word) => ENGLISH_FUNCTION_WORDS.has(word)).length;
-  const strongEnglish = words.filter((word) => ENGLISH_FUNCTION_WORDS.has(word) && !WEAK_ENGLISH_WORDS.has(word)).length;
-  const foreignHits = words.filter((word) => FOREIGN_FUNCTION_WORDS.has(word)).length;
-  if (foreignHits > 0 && foreignHits >= strongEnglish) return false;
-  if (words.length < 5 && !ENGLISH_QUESTION.test(value)) return false;
-  if (strongEnglish === 0 && words.length < 6) return false;
-  if (englishHits === 0) return false;
-  return true;
-}
 const ALLOWED_ANALYSIS_MODELS = new Set(
   (process.env.OPENAI_ALLOWED_MODELS || "gpt-4.1,gpt-4o")
     .split(",")
@@ -139,33 +113,39 @@ router.post("/openai/realtime/session", async (req, res) => {
     }
   }
 
+  const speakMode = detectSpeakMode(typeof req.body?.transcript === "string" ? req.body.transcript : "");
   const modeInstructions = mode === "interview"
     ? [
-      "You are the candidate on a live data-engineering interview. Answer in first person as that person.",
-      "Treat the most recent completed user turn as the exact question.",
-      "Parakeet format: one spoken opener, then 3 to 5 short bullets the candidate can glance at and say.",
+      "You are the candidate: a working senior data engineer speaking out loud to an interviewer.",
+      "Conversational spoken English. No bullet lists. No headings.",
+      speakModeCue(speakMode),
     ]
     : [
-      "You are that same data engineer on a live work call. Write as them in first person.",
-      "Treat the most recent completed user turn as the exact request.",
-      "Parakeet format: one spoken opener, then 3 to 5 short teammate talking points.",
+      "You are that same senior engineer on a live work call.",
+      "Conversational spoken English. No bullet lists. No headings.",
+      speakModeCue(speakMode),
     ];
 
   const instructions = [
-    "You write this person's on-screen answers like Parakeet. Never speak with voice. Never generate audio.",
-    "You are a real senior data engineer. First person only. Not a coach.",
+    "You write this person's on-screen answers. Never speak with voice. Never generate audio.",
+    "You are a senior data engineer talking, not a coach and not Wikipedia.",
+    CANDIDATE_IDENTITY,
+    "Detect the subject from the question, use frozen subject docs as knowledge, then answer THIS question out loud. Do not paste a canned Q&A.",
     "Write every answer in US English with American spelling. Never reply in Hindi or any other language.",
     "If the transcript is not a clear US English question, say you did not catch the question. Do not invent a topic from foreign or nonsense words.",
     "Answer the spoken question as captured. Do not swap their words for resume keywords or guessed jargon.",
-    "Format: line 1 is the spoken opener. Then 3 to 5 short bullets starting with •. One idea per line.",
-    "No headings, no JSON, no Contextual Explanation, no inventory confirmation boxes.",
-    "No 'As an AI', no 'Great question', no 'Based on the conversation', no 'I'm not aware'.",
-    "Do not invent projects, metrics, or employers.",
-    "If a skill is not in the resume, say you have working knowledge and can ramp — do not fake ownership.",
-    "Keep ordinary answers under 90 words. Include code only when they explicitly asked for code.",
+    "LOCKDOWN: conversational paragraphs only. Do not use • bullets unless they asked for a list. Do not use headings like Definition or Best Practices.",
+    "Start with the direct answer, then expand naturally. Do not force 'In my current project' on every question.",
+    "No 'As an AI', no 'Great question', no 'Based on the conversation', no 'I'm not aware'. Never start with Yeah, So basically, or Right so.",
+    "Do not invent projects, metrics, incidents, or employers. If the resume does not support a claim, speak as a general industry approach.",
+    "If a skill is not the day-job stack, still answer it from frozen subject docs and map it. Daily is Azure ADF/Databricks.",
+    "Simple questions: about 15–30 seconds spoken. Normal: 30–60 seconds. Architecture: up to about 90 seconds. Concise first; expand if the question is complex.",
+    "Never dump REST, SCIM, or placeholder Python unless they asked for that script.",
+    "If they asked for a query or script: full real production SQL/PySpark in sections, then a short spoken explanation of that query.",
     ...modeInstructions,
     sessionGuidance ? `Persona / session guidance from the user (follow this strictly):\n${sessionGuidance}` : "",
     documentContext.length ? `Resume and documents (this is who you are):\n${documentContext.join("\n")}` : "",
+    `Frozen topic pack:\n${subjectContext(typeof req.body?.transcript === "string" ? req.body.transcript : "")}`,
   ].filter(Boolean).join("\n");
 
   const silenceDurationMs = mode === "meeting"
@@ -232,53 +212,6 @@ router.post("/openai/realtime/session", async (req, res) => {
 
 const resumeEmbeddingCache = new Map<string, EmbeddingCacheEntry>();
 
-function isCodeIntent(text: string): boolean {
-  const t = text.toLowerCase();
-  return /(write (me )?(a |the )?(code|query|script|function)|give me (the )?(code|sql|query|script)|show me (the )?(code|sql|pyspark|query)|paste the (code|query)|executable code|implement (this|it) in|python script|pyspark (code|script)|sql query to)/i.test(t);
-}
-
-function toParakeetScript(text: string) {
-  const cleaned = text
-    .replace(/```[\s\S]*?```/g, " ")
-    .replace(/^\s*#{1,6}\s+.+$/gm, "")
-    .replace(/^\s*\*\*[^*]+\*\*\s*:?\s*$/gm, "")
-    .replace(/^\s*(contextual explanation|cluster inventory confirmation|explanation|interview tip|follow-?up|details|notes|what is data skew.*)\s*:?\s*$/gim, "")
-    .replace(/^\s*[A-Z][A-Z0-9 /,&:\-]{10,}\s*$/gm, "")
-    .replace(/\*\*/g, "")
-    .trim();
-
-  let lines = cleaned
-    .split(/\n+/)
-    .map((line) => line.replace(/^\s*(?:[-*]|•)\s+/, "").replace(/\s+/g, " ").trim())
-    .filter(Boolean);
-
-  if (lines.length < 3 && /•/.test(cleaned)) {
-    lines = cleaned
-      .split("•")
-      .map((line) => line.replace(/\s+/g, " ").trim())
-      .filter(Boolean);
-  }
-
-  if (lines.length < 3) {
-    const sentences = cleaned
-      .replace(/\s+/g, " ")
-      .split(/(?<=[.!?])\s+/)
-      .map((sentence) => sentence.trim())
-      .filter((sentence) => sentence.length > 8);
-    if (sentences.length >= 3) lines = sentences;
-  }
-
-  if (lines.length === 0) return "";
-  if (lines.length === 1) return lines[0];
-
-  const opener = lines[0].replace(/^[•\-]\s*/, "");
-  const points = lines.slice(1).map((line) => {
-    const body = line.replace(/^[•\-]\s*/, "").replace(/[.]+$/, "");
-    return `• ${body}`;
-  });
-  return [opener, ...points].join("\n");
-}
-
 function extractExplicitQuestion(text: string): string | null {
   const match = text.match(/ANSWER THIS:\s*"([\s\S]*?)"/i);
   if (!match?.[1]) return null;
@@ -308,13 +241,24 @@ type InterviewQuestionType =
   | "Database Question"
   | "Databricks Question"
   | "Azure Question"
+  | "Snowflake Question"
+  | "Fabric Question"
+  | "GCP Question"
+  | "DevOps Question"
   | "General Meeting Question";
 
 function detectQuestionType(text: string): InterviewQuestionType {
   const t = (text || "").toLowerCase();
   if (!t.trim()) return "General Meeting Question";
-  if (/(databricks|unity catalog|delta live table|dlt|autoloader|medallion)/i.test(t)) return "Databricks Question";
-  if (/(azure|adf|synapse|data lake|key vault|azure devops|event hub)/i.test(t)) return "Azure Question";
+  if (/(snowflake|snowpipe)/i.test(t)) return "Snowflake Question";
+  if (/(microsoft fabric|\bfabric\b|onelake|direct lake)/i.test(t)) return "Fabric Question";
+  if (/(synapse|dedicated sql pool|serverless sql)/i.test(t)) return "Cloud Question";
+  if (/(key vault|keyvault)/i.test(t)) return "Azure Question";
+  if (/(azure monitor|log analytics)/i.test(t)) return "Azure Question";
+  if (/(\bgcp\b|google cloud|bigquery|dataproc|cloud composer)/i.test(t)) return "GCP Question";
+  if (/(github action|ci\/?cd|cicd|azure devops|dataops|branching strategy)/i.test(t)) return "DevOps Question";
+  if (/(databricks|unity catalog|delta live table|dlt|autoloader|medallion|\badb\b)/i.test(t)) return "Databricks Question";
+  if (/(azure|adf|synapse|data lake|key vault|event hub)/i.test(t)) return "Azure Question";
   if (/(sql|database|query|normalization|index|join|stored procedure|cte|window function)/i.test(t)) return "Database Question";
   if (/(code|coding|implement|write a function|algorithm|complexity|time complexity|space complexity)/i.test(t)) return "Coding Question";
   if (/(project|architecture|system design|end to end|production issue|impact)/i.test(t)) return "Project Question";
@@ -684,19 +628,21 @@ async function runCodeRepairPass(args: {
     messages: [
       {
         role: "system",
-        content: `You convert weak/prose responses into accurate executable technical output.
+        content: `You convert weak answers into a real production query/script plus a short spoken explanation.
 
 Rules:
 - Return ONLY valid JSON.
-- If user intent is SQL, return syntactically correct SQL query as answer.
-- If user intent is Python/PySpark, return runnable script with imports.
-- No explanation text in answer for code asks.
-- Never include markdown fences in answer.
+- sections[0].content is the full real query or script a data engineer would run today.
+- No placeholders, no angle brackets, no YOUR_TOKEN, no pass, no TODOs, no truncated code.
+- Use realistic names like hive_metastore or main.bronze.orders, spark, dbutils.
+- answer is a short spoken explanation of what that query/script does. Conversational. No bullets.
+- Never put the query text inside answer.
+- Never include markdown fences.
 
 JSON schema:
 {
-  "answer": "string",
-  "sections": [{ "type": "sql|code", "title": "SQL Query|Python Script|PySpark Script|Code", "language": "sql|python", "content": "string" }]
+  "answer": "This query keeps the latest row per id and writes it to silver.",
+  "sections": [{ "type": "sql|code", "title": "SQL Query|Python Script|PySpark Script|Code", "language": "sql|python", "content": "full real query" }]
 }`,
       },
       {
@@ -785,6 +731,7 @@ router.post("/openai/analyze", async (req, res) => {
   }
 
   try {
+    const analyzeStarted = Date.now();
     // Only ground from uploaded documents when the question is clearly resume/profile related.
     if (useGrounding && uploadedDocs && uploadedDocs.length > 0) {
       const docsLines: string[] = [];
@@ -862,58 +809,67 @@ router.post("/openai/analyze", async (req, res) => {
 
     const inferredQuestion = explicitQuestion ?? transcript ?? "";
     const questionType = detectQuestionType(inferredQuestion);
-    const spokenAnswer = !isCodeIntent(inferredQuestion);
+    const speakMode = detectSpeakMode(inferredQuestion);
+    const codeIntent = isCodeIntent(inferredQuestion);
+    const spokenAnswer = !codeIntent;
+    const subjects = matchingSubjects(inferredQuestion);
     const modeVoice = mode === "interview"
-      ? `INTERVIEW: You are the candidate. Answer the interviewer the way a hired senior data engineer would actually speak. Direct, first person, concrete. No lecture. No inventory confirmation. No "I can check with admin."`
-      : `MEETING: You are on a live work call. Answer like a data engineer talking to teammates. Decisive. Say what we run and what you would do next. No consultant hedging.`;
+      ? `INTERVIEW: You are the candidate speaking out loud. Conversational. Not notes.`
+      : `MEETING: You are that same senior engineer on a live work call. Conversational. Not notes.`;
+    const codeVoice = codeIntent
+      ? `They asked for a query or script. Put a complete real production query/script in sections. Put a short spoken explanation of that query in answer. No placeholders.`
+      : `They did NOT ask for code. Speak like an experienced employee. No bullet lists. Do not paste a memorized Q&A.`;
 
     const completion = await openai.chat.completions.create({
       model: analysisModel,
-      temperature: spokenAnswer ? 0.55 : 0.15,
+      temperature: spokenAnswer ? 0.6 : 0.15,
       top_p: spokenAnswer ? 0.9 : 0.9,
       messages: [
         {
           role: "system",
-          content: `You are a Parakeet-style live copilot. The user glances at your text and speaks it. Never generate audio.
+          content: `You are Hika, a live interview copilot. The candidate glances at your text and speaks it. Never generate audio.
 
 Session mode: ${mode}
 Detected question type: ${questionType}
+Speak mode: ${speakMode}
 ${modeVoice}
+${codeVoice}
+${speakModeCue(speakMode)}
 
-You ARE this person: a real senior data engineer on a live ${mode}. Use the resume, JD, and session guidance as your identity. First person only. You are not a coach.
+You ARE a senior Azure data engineer on a live ${mode}. Resume, JD, session guidance, and frozen SUBJECT DOCS are your knowledge. Not a coach. Not Wikipedia.
+${CANDIDATE_IDENTITY}
+Detected subjects for this question: ${subjects.join(", ")}
+If the resume names an employer, project, or stack, use those exact names. Never invent the rest.
 
-ANSWER FORMAT — this is mandatory, like Parakeet:
-Line 1: a spoken opener plus the direct answer. Contractions. "Yeah", "So basically", "Right, so", or go straight in.
-Then 3 to 5 short bullets. Start each with •. One idea per line. Easy to glance at while talking.
-Under 90 words. No blank section titles.
+FROZEN TOPIC PACK (retrieved slices only — speak from these, do not recite as notes):
+${subjectContext(inferredQuestion)}
 
-Interview example for cluster types:
-Yeah, so we mainly use three cluster types in Databricks.
-• All-purpose — notebooks and interactive work while I'm developing
-• Job clusters — they spin up for a scheduled job and auto-terminate
-• High concurrency — shared SQL compute so BI users aren't fighting for the same cluster
+${SENIOR_ANSWER_LENS}
 
-Meeting example for "any other clusters":
-Right — in this workspace it's just those three.
-• Interactive for notebooks
-• Job clusters for scheduled runs
-• High concurrency for SQL / BI
-• I haven't stood up anything else. If a new workload needs its own, I can add it
+SPOKEN ANSWER LOCKDOWN:
+- One natural answer the candidate can say out loud. Paragraphs, not bullets.
+- Direct answer first, then expand only as far as this question needs.
+- Do not force "In my current project" on definition questions.
+- Simple: ~15–30 seconds. Normal: ~30–60 seconds. Architecture: ~60–90 seconds.
+- Name real tools from the matching subject docs. Map AWS/GCP/Kafka when that is the question.
+- Natural transitions: "For example...", "The reason we did that was...", "One issue we faced was..." only if the resume supports it, "From a production perspective...", "In that situation..."
+- keyPoints: 3 to 5 short visual anchors for a side panel, not spoken.
 
-Behavioral example:
-Yeah, a recent one was late data hitting a gold dashboard.
-• Pipeline was dropping same-day events after a timezone change
-• I added a watermark and a Delta merge on the unique key
-• Dashboard caught up without a full reload
+${VOICE_EXAMPLES}
 
-Use real data-engineering language when it fits: bronze/silver/gold, Autoloader, Delta, Unity Catalog, job vs all-purpose clusters, watermarks, shuffle, SCD.
+WHEN THEY ASK FOR A QUERY OR SCRIPT:
+- sections[0].content = the full real query/script you would run in prod today
+- No <placeholders>, no YOUR_TOKEN, no truncated code
+- answer = short spoken explanation of that query, still conversational, no bullets
 
 Never do this:
-- Headings or labels like Contextual Explanation, Cluster Inventory Confirmation, Explanation, Interview Tip
-- A single dense paragraph
-- "I'm not aware", "I can check with admin", "as of now these are the main", "Great question", "As a data engineer with X years", "As an AI"
-- Dump REST API, Terraform, or Python unless they explicitly asked for code
-- Invent employers, projects, or metrics. If it is not in the resume, say you have working knowledge and can ramp
+- Headings like Contextual Explanation, Definition, Implementation, Best Practices
+- Bullet lists (•) in the spoken answer
+- Telegram notes like "Architecture Center is sources into a lake..."
+- Generic textbook answers with no "what I actually do"
+- REST / SCIM / requests.post unless they asked for that script
+- "I'm not aware", "Great question", "As an AI", "as of now", "Yeah,", "So basically"
+- Invent employers, projects, incidents, or metrics
 
 If the transcript is not a clear English question, answer only: I didn't catch a clear English question. Press Listen again.
 
@@ -921,18 +877,19 @@ Output JSON only:
 {
   "question": "The speaker's English question, ≤60 chars",
   "questionType": "${questionType}",
-  "recommendedAnswer": "The Parakeet-style spoken script with line breaks and • bullets",
-  "answer": "The Parakeet-style spoken script with line breaks and • bullets",
+  "recommendedAnswer": "Conversational spoken answer, no bullets",
+  "answer": "Conversational spoken answer, no bullets",
+  "keyPoints": ["short anchor", "short anchor"],
   "confidence": "high|medium|low",
   "sections": []
 }
 
-Keep sections empty unless they explicitly asked for code. Put newline characters in answer. The answer field is the on-screen script.`,
+sections stay empty unless they explicitly asked for a query or script.`,
         },
         { role: "user", content: userContent },
       ],
       response_format: { type: "json_object" },
-      max_tokens: 1300,
+      max_tokens: 1600,
     });
 
     const raw = completion.choices[0]?.message?.content ?? "{}";
@@ -949,6 +906,7 @@ Keep sections empty unless they explicitly asked for code. Put newline character
       domain?: string;
       suggestions?: string[];
       confidence?: string;
+      keyPoints?: string[];
       sections?: Array<{ type: string; title: string; content: string; language?: string | null }>;
     };
     try {
@@ -958,7 +916,7 @@ Keep sections empty unless they explicitly asked for code. Put newline character
     }
 
     const transcriptText = typeof transcript === "string" ? transcript : "";
-    const codeIntent = isCodeIntent(explicitQuestion ?? transcriptText);
+    const askedForCode = isCodeIntent(explicitQuestion ?? transcriptText);
     const sections = (result.sections ?? []).map((s) => ({
       ...s,
       language: normalizeLanguage(s.language),
@@ -973,26 +931,38 @@ Keep sections empty unless they explicitly asked for code. Put newline character
 
     let answer = (result.answer ?? "").trim();
 
-    if (codeIntent) {
-      const codeSection = sections.find((section) => section.content && /^(code|sql)$/i.test(section.type));
+    if (askedForCode) {
+      const codeSection = sections.find((section) => section.content && /^(code|sql|python|pyspark)$/i.test(section.type));
       const preferredLanguage = detectRequestedLanguage(explicitQuestion ?? transcriptText);
       const firstCodeBlock = extractFirstCodeBlock(answer);
-
-      if (codeSection?.content) {
-        answer = codeSection.content;
-      } else if (firstCodeBlock?.code) {
-        answer = firstCodeBlock.code;
-      } else {
-        const repaired = await runCodeRepairPass({
-          promptQuestion: explicitQuestion ?? transcriptText,
-          originalAnswer: answer || recommendedAnswer,
-          preferredLanguage,
-        });
-        answer = repaired.answer || repaired.sections[0]?.content || "Unable to generate executable code for this request.";
-        if (repaired.sections.length) sections.splice(0, sections.length, ...repaired.sections);
+      if (!codeSection?.content) {
+        if (firstCodeBlock?.code) {
+          sections.splice(0, sections.length, {
+            type: preferredLanguage === "sql" ? "sql" : "code",
+            title: preferredLanguage === "sql" ? "SQL Query" : "Code",
+            language: firstCodeBlock.language || preferredLanguage || "python",
+            content: firstCodeBlock.code,
+          });
+        } else {
+          const repaired = await runCodeRepairPass({
+            promptQuestion: explicitQuestion ?? transcriptText,
+            originalAnswer: answer || recommendedAnswer,
+            preferredLanguage,
+          });
+          if (repaired.sections.length) sections.splice(0, sections.length, ...repaired.sections);
+          if (repaired.answer) answer = repaired.answer;
+        }
       }
+      const spoken = toSpokenAnswer(stripCodeFences(looksLikeCodeDump(answer) ? recommendedAnswer : answer) || recommendedAnswer);
+      answer = spoken || "This is the query I would run. It does the job in one pass.";
     } else {
-      answer = toParakeetScript(recommendedAnswer || answer);
+      const source = [recommendedAnswer, answer].find((text) => text && !looksLikeCodeDump(text)) || "";
+      answer = toSpokenAnswer(source);
+      if (!answer && isProcessQuestion(explicitQuestion ?? transcriptText)) {
+        answer = toSpokenAnswer(
+          "I don't grant people one by one. I put them in an Azure AD group and grant the group on Unity Catalog. ADF service principals get the same pattern. Then I validate they can open the schema, not the whole lake.",
+        );
+      }
       sections.splice(0, sections.length);
     }
 
@@ -1000,19 +970,49 @@ Keep sections empty unless they explicitly asked for code. Put newline character
       answer = "I didn't catch a clear English question. Press Listen again.";
     }
 
+    const quality = scoreEmployeeAnswer(answer, askedForCode);
+    if (!quality.ok) {
+      req.log.warn({
+        event: !askedForCode && quality.reason === "code_dump" ? "analyze.code_dump_on_howto" : "analyze.quality_fail",
+        reason: quality.reason,
+        askedForCode,
+      });
+      if (!askedForCode) {
+        answer = toSpokenAnswer(answer);
+        if (!scoreEmployeeAnswer(answer, false).ok && isProcessQuestion(explicitQuestion ?? transcriptText)) {
+          answer = "I don't grant people one by one. I put them in an Azure AD group and grant the group on Unity Catalog. ADF service principals get the same pattern. Then I validate they can open the schema, not the whole lake.";
+        }
+      }
+    }
+
     const normalizedQuestion = (result.question ?? "").trim();
     const safeQuestion = normalizedQuestion && !/^meeting context$/i.test(normalizedQuestion)
       ? normalizedQuestion
       : `${questionType}: Live question`;
 
+    req.log.info({
+      event: "analyze.complete",
+      source: "subject_docs",
+      subjects,
+      ms: Date.now() - analyzeStarted,
+      questionType,
+      quality: quality.reason,
+      askedForCode,
+    });
+
+    const keyPoints = Array.isArray(result.keyPoints)
+      ? result.keyPoints.map((point) => String(point || "").trim()).filter(Boolean).slice(0, 5)
+      : extractKeyPoints(answer);
+
     res.json({
       question: safeQuestion,
       questionType: result.questionType ?? questionType,
       answer,
-      domain: result.domain ?? "General Business",
+      keyPoints,
+      domain: subjects[0] === "azure" ? "Azure Data Engineering" : subjects[0].toUpperCase(),
       suggestions: [],
       confidence: result.confidence ?? "low",
-      sections: codeIntent ? sections : [],
+      sections: askedForCode ? sections : [],
       credits: spent.credits,
     });
   } catch (err) {
@@ -1029,9 +1029,10 @@ router.post("/openai/transcribe", async (req, res) => {
     return;
   }
 
-  const { audioBase64, mimeType = "audio/webm" } = parsed.data;
+    const { audioBase64, mimeType = "audio/webm" } = parsed.data;
+    const preview = req.body?.preview === true;
 
-  try {
+    try {
     if (!/^audio\/(webm|ogg|mp4|mpeg|mp3)(?:;|$)/i.test(mimeType)) {
       res.status(415).json({ error: "Unsupported audio format" });
       return;
@@ -1048,8 +1049,8 @@ router.post("/openai/transcribe", async (req, res) => {
       return;
     }
 
-    const spent = await takeCredits(req, res, CREDIT_COSTS.transcribe);
-    if (!spent) return;
+    const spent = preview ? null : await takeCredits(req, res, CREDIT_COSTS.transcribe);
+    if (!preview && !spent) return;
 
     const ext = mimeType.includes("mp4")
       ? "mp4"
@@ -1076,9 +1077,15 @@ router.post("/openai/transcribe", async (req, res) => {
         ? transcription
         : ((transcription as { text?: string }).text ?? "");
     const text = raw.replace(/\s+/g, " ").trim();
-    res.json({ transcript: looksLikeUsEnglish(text) ? text : "", credits: spent.credits });
+    const english = looksLikeUsEnglish(text);
+    if (text && !english) {
+      req.log.info({ event: "transcribe.english_reject", preview, chars: text.length });
+    }
+    res.json({ transcript: english ? text : "", credits: spent?.credits });
   } catch (err) {
-    await grantCredits(req.authUser!.id, CREDIT_COSTS.transcribe).catch(() => undefined);
+    if (!preview) {
+      await grantCredits(req.authUser!.id, CREDIT_COSTS.transcribe).catch(() => undefined);
+    }
     req.log.error({ err }, "OpenAI transcription failed");
     res.status(500).json({
       error: "Failed to transcribe audio",

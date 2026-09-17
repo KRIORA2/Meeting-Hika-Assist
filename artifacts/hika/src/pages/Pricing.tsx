@@ -19,6 +19,7 @@ export default function Pricing() {
   const [, navigate] = useLocation();
   const [interval, setInterval] = useState<"month" | "year">("month");
   const [account, setAccount] = useState<Account | null>(null);
+  const [billingLive, setBillingLive] = useState(false);
   const [status, setStatus] = useState("");
   const [busy, setBusy] = useState<"session" | "pro" | "">("");
   const signedIn = isAuthenticated();
@@ -31,6 +32,13 @@ export default function Pricing() {
   }, [search]);
 
   useEffect(() => {
+    void fetch(`${API_URL}/api/billing/plans`)
+      .then((response) => response.ok ? response.json() : null)
+      .then((payload: { configured?: boolean } | null) => {
+        if (payload && typeof payload.configured === "boolean") setBillingLive(payload.configured);
+      })
+      .catch(() => undefined);
+    void loadAccount();
     return subscribeAuth(() => {
       void loadAccount();
     });
@@ -68,7 +76,7 @@ export default function Pricing() {
       });
       const result = await response.json() as { checkoutUrl?: string; error?: string };
       if (!response.ok || !result.checkoutUrl) {
-        setStatus(result.error || "Checkout is not live yet. Add Stripe keys on the API to enable payments.");
+        setStatus(result.error || (billingLive ? "Could not start checkout." : "Checkout is not live yet. Add Stripe keys on the API to enable payments."));
         return;
       }
       window.location.assign(result.checkoutUrl);
@@ -196,7 +204,7 @@ export default function Pricing() {
         </div>
 
         <p className="mt-8 text-xs text-white/35 flex items-center gap-2">
-          <Sparkles size={12} /> Pay on the website. The desktop app never asks for a card. Yearly Pro is ${PRO_YEARLY_USD} ({PRO_MONTHLY_USD} × 10 months).
+          <Sparkles size={12} /> {billingLive ? "Pay on the website. The desktop app never asks for a card." : "Checkout turns on when Stripe keys are set on the API."} Yearly Pro is ${PRO_YEARLY_USD} ({PRO_MONTHLY_USD} × 10 months).
         </p>
       </div>
     </div>
