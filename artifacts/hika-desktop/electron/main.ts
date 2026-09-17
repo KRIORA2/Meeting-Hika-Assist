@@ -1,6 +1,6 @@
 import {
-  app, BrowserWindow, Tray, Menu, ipcMain,
-  nativeImage, screen, desktopCapturer, shell, safeStorage,
+  app, BrowserWindow, Tray, Menu, ipcMain, session,
+  nativeImage, screen, desktopCapturer, shell, safeStorage, systemPreferences,
 } from "electron";
 import { autoUpdater } from "electron-updater";
 import path from "path";
@@ -8,15 +8,7 @@ import fs from "fs";
 
 const isDev = !app.isPackaged;
 
-let overlayWindow: BrowserWindow | null = null;
-let tray: Tray | null = null;
-let buildTrayMenu: (() => Menu) | null = null;
-let clickThroughEnabled = false;
-let pendingDesktopAuthCode: string | null = null;
-let updateCheckInFlight = false;
-let updateDownloadInFlight = false;
-let updateSessionActive = false;
-let updateCheckTimer: ReturnType<typeof setInterval> | null = null;
+app.commandLine.appendSwitch("autoplay-policy", "no-user-gesture-required");
 
 type UpdateState = "checking" | "update-available" | "downloading" | "update-downloaded" | "up-to-date" | "error";
 
@@ -28,11 +20,50 @@ type UpdateStatePayload = {
   message?: string;
 };
 
+let overlayWindow: BrowserWindow | null = null;
+let tray: Tray | null = null;
+let buildTrayMenu: (() => Menu) | null = null;
+let clickThroughEnabled = false;
+let pendingDesktopAuthCode: string | null = null;
+let updateCheckInFlight = false;
+let updateDownloadInFlight = false;
+let updateSessionActive = false;
+let updateCheckTimer: ReturnType<typeof setInterval> | null = null;
+let lastUpdatePayload: UpdateStatePayload | null = null;
+let notifiedUpdateVersion: string | null = null;
+
 function sendUpdateState(payload: Omit<UpdateStatePayload, "currentVersion">) {
-  overlayWindow?.webContents.send("update-state", {
+  lastUpdatePayload = {
     ...payload,
     currentVersion: app.getVersion(),
-  } satisfies UpdateStatePayload);
+  };
+  overlayWindow?.webContents.send("update-state", lastUpdatePayload);
+  refreshTrayMenu();
+  notifyTrayOfUpdate(lastUpdatePayload);
+}
+
+function refreshTrayMenu() {
+  if (tray && buildTrayMenu) tray.setContextMenu(buildTrayMenu());
+}
+
+function notifyTrayOfUpdate(payload: UpdateStatePayload) {
+  if (!tray) return;
+  if (payload.state === "update-available" && payload.version) {
+    tray.setToolTip(`Hikanest — Update ${payload.version} available`);
+    if (notifiedUpdateVersion !== payload.version) {
+      notifiedUpdateVersion = payload.version;
+      tray.displayBalloon({
+        title: "Hikanest update available",
+        content: `Version ${payload.version} is ready. Open the ⋮ menu to download and install it.`,
+      });
+    }
+    return;
+  }
+  if (payload.state === "update-downloaded" && payload.version) {
+    tray.setToolTip(`Hikanest — Update ${payload.version} ready to install`);
+    return;
+  }
+  tray.setToolTip("Hikanest — AI Meeting Assistant\nInvisible to screen capture");
 }
 
 function configureAutoUpdater() {
@@ -157,19 +188,17 @@ function writeSecureStore(store: Record<string, string>) {
 }
 
 function encryptValue(value: string): string {
-  if (safeStorage.isEncryptionAvailable()) {
-    return safeStorage.encryptString(value).toString("base64");
+  if (!safeStorage.isEncryptionAvailable()) {
+    throw new Error("OS secure storage is unavailable.");
   }
-  return Buffer.from(value, "utf8").toString("base64");
+  return safeStorage.encryptString(value).toString("base64");
 }
 
 function decryptValue(value: string): string | null {
   try {
     const buffer = Buffer.from(value, "base64");
-    if (safeStorage.isEncryptionAvailable()) {
-      return safeStorage.decryptString(buffer);
-    }
-    return buffer.toString("utf8");
+    if (!safeStorage.isEncryptionAvailable()) return null;
+    return safeStorage.decryptString(buffer);
   } catch {
     return null;
   }
@@ -184,6 +213,30 @@ const MEETING_APPS = [
   { match: "whereby",     label: "Whereby" },
   { match: "chime",       label: "Chime" },
 ];
+
+function isMediaPermission(permission: string) {
+  return permission === "media"
+    || permission === "microphone"
+    || permission === "audioCapture"
+    || permission === "mediaKeySystem";
+}
+
+function allowMediaPermissions(ses: Electron.Session) {
+  ses.setPermissionRequestHandler((_webContents, permission, callback) => {
+    callback(isMediaPermission(permission));
+  });
+  ses.setPermissionCheckHandler((_webContents, permission) => isMediaPermission(permission));
+}
+
+async function requestMicrophoneAccess() {
+  if (process.platform !== "darwin") return;
+  try {
+    const status = systemPreferences.getMediaAccessStatus("microphone");
+    if (status !== "granted") await systemPreferences.askForMediaAccess("microphone");
+  } catch {
+    // Windows/Linux grant mic access from the Chromium permission handler.
+  }
+}
 
 // ── Overlay window ────────────────────────────────────────────────────────────
 function createOverlay() {
@@ -214,8 +267,16 @@ function createOverlay() {
       preload: path.join(__dirname, "preload-overlay.js"),
       contextIsolation: true,
       nodeIntegration: false,
+      sandbox: true,
+      webSecurity: true,
+      autoplayPolicy: "no-user-gesture-required",
     },
   });
+
+  allowMediaPermissions(overlayWindow.webContents.session);
+
+  overlayWindow.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+  overlayWindow.webContents.on("will-navigate", (event) => event.preventDefault());
 
   // ─────────────────────────────────────────────────────────────────────────
   // THE KEY CALL — WDA_EXCLUDEFROMCAPTURE on Windows, CGWindowSharingNone on
@@ -242,6 +303,11 @@ function createOverlay() {
     startMeetingDetection();
     overlayWindow?.webContents.send("clickthrough-changed", clickThroughEnabled);
     if (pendingDesktopAuthCode) overlayWindow?.webContents.send("desktop-auth-code", pendingDesktopAuthCode);
+    if (lastUpdatePayload) overlayWindow?.webContents.send("update-state", lastUpdatePayload);
+  });
+
+  overlayWindow.on("show", () => {
+    if (lastUpdatePayload) overlayWindow?.webContents.send("update-state", lastUpdatePayload);
   });
 }
 
@@ -329,6 +395,37 @@ function createTray() {
       },
       { type: "separator" },
       {
+        label: lastUpdatePayload?.state === "checking"
+          ? "Checking for updates..."
+          : "Check for updates",
+        enabled: lastUpdatePayload?.state !== "checking" && lastUpdatePayload?.state !== "downloading",
+        click: () => {
+          overlayWindow?.show();
+          void checkForUpdates();
+        },
+      },
+      {
+        label: lastUpdatePayload?.version
+          ? `Download update ${lastUpdatePayload.version}`
+          : "Download update",
+        enabled: lastUpdatePayload?.state === "update-available",
+        click: () => {
+          overlayWindow?.show();
+          void downloadUpdate();
+        },
+      },
+      {
+        label: lastUpdatePayload?.version
+          ? `Install update ${lastUpdatePayload.version} & restart`
+          : "Install update & restart",
+        enabled: lastUpdatePayload?.state === "update-downloaded" && !updateSessionActive,
+        click: () => {
+          overlayWindow?.show();
+          installUpdate();
+        },
+      },
+      { type: "separator" },
+      {
         label: "Open Log Folder",
         click: () => shell.openPath(app.getPath("logs")),
       },
@@ -348,14 +445,15 @@ function createTray() {
 // ── IPC handlers ──────────────────────────────────────────────────────────────
 
 const PRODUCTION_API_URL = "https://hikanest-api-v1.onrender.com";
+const PRODUCTION_WEB_APP_URL = "https://hikanest-web-beta.onrender.com";
 
 // Use the deployed API unless a developer explicitly supplies an override.
 ipcMain.handle("get-api-url", () => {
   return process.env.HIKA_API_URL ?? PRODUCTION_API_URL;
 });
 
-ipcMain.handle("get-google-client-id", () => {
-  return process.env.HIKA_GOOGLE_CLIENT_ID ?? process.env.GOOGLE_CLIENT_ID ?? "";
+ipcMain.handle("get-web-app-url", () => {
+  return process.env.HIKA_WEB_APP_URL ?? PRODUCTION_WEB_APP_URL;
 });
 
 ipcMain.handle("is-development", () => isDev);
@@ -370,9 +468,15 @@ ipcMain.on("set-update-session-active", (_event, active: boolean) => {
 });
 
 ipcMain.handle("open-external", async (_event, url: string) => {
-  if (!/^https:\/\//i.test(url)) return false;
-  await shell.openExternal(url);
-  return true;
+  try {
+    const target = new URL(url);
+    const allowedOrigin = new URL(process.env.HIKA_WEB_APP_URL ?? PRODUCTION_WEB_APP_URL).origin;
+    if (target.protocol !== "https:" || target.origin !== allowedOrigin) return false;
+    await shell.openExternal(target.toString());
+    return true;
+  } catch {
+    return false;
+  }
 });
 
 // Toggle click-through mode
@@ -409,19 +513,24 @@ ipcMain.handle("capture-screen", async () => {
   }
 });
 
+const ALLOWED_SECURE_STORAGE_KEYS = new Set(["hikaSessionToken", "hikaAuthSession"]);
+
 ipcMain.handle("secure-storage-get", (_e, key: string) => {
+  if (!ALLOWED_SECURE_STORAGE_KEYS.has(key)) return null;
   const store = readSecureStore();
   const value = store[key];
   return value ? decryptValue(value) : null;
 });
 
 ipcMain.handle("secure-storage-set", (_e, key: string, value: string) => {
+  if (!ALLOWED_SECURE_STORAGE_KEYS.has(key)) throw new Error("Secure storage key is not allowed.");
   const store = readSecureStore();
   store[key] = encryptValue(value);
   writeSecureStore(store);
 });
 
 ipcMain.handle("secure-storage-delete", (_e, key: string) => {
+  if (!ALLOWED_SECURE_STORAGE_KEYS.has(key)) return;
   const store = readSecureStore();
   delete store[key];
   writeSecureStore(store);
@@ -435,7 +544,9 @@ ipcMain.on("overlay-pin",  () => {
 ipcMain.on("overlay-close", () => app.quit());
 
 // ── App lifecycle ─────────────────────────────────────────────────────────────
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
+  allowMediaPermissions(session.defaultSession);
+  await requestMicrophoneAccess();
   configureAutoUpdater();
   app.setAsDefaultProtocolClient("hikanest");
   const authUrl = process.argv.find((value) => value.startsWith("hikanest://"));
@@ -445,12 +556,9 @@ app.whenReady().then(() => {
 
   if (!isDev) {
     setTimeout(() => { void checkForUpdates(); }, 5000);
-    updateCheckTimer = setInterval(() => { void checkForUpdates(); }, 6 * 60 * 60 * 1000);
+    updateCheckTimer = setInterval(() => { void checkForUpdates(); }, 60 * 60 * 1000);
   }
 
-  app.on("activate", () => {
-    if (!overlayWindow) createOverlay();
-  });
 });
 
 app.on("window-all-closed", () => {

@@ -1,12 +1,12 @@
 import { useEffect, useState } from "react";
-import { getStoredSessionToken } from "@/lib/auth";
+import { getAccessToken } from "@/lib/auth";
 
 export default function DesktopConnect() {
   const [message, setMessage] = useState("Opening Hikanest desktop...");
 
   useEffect(() => {
     async function connect() {
-      const token = getStoredSessionToken();
+      const token = await getAccessToken();
       if (!token) {
         window.location.assign("/login?next=%2Fdesktop-connect");
         return;

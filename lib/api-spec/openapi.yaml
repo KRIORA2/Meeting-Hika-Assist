@@ -308,11 +308,47 @@ components:
         transcript:
           type: string
           description: Recent meeting transcript text
+          maxLength: 12000
         screenshotBase64:
           type: ["string", "null"]
           description: Optional base64-encoded PNG screenshot of the meeting screen
         sessionId:
           type: ["integer", "null"]
+        mode:
+          type: string
+          enum: [interview, meeting]
+          default: interview
+        model:
+          type: string
+          description: Requested model; the API enforces its server-side allowlist
+        history:
+          type: array
+          maxItems: 12
+          items:
+            $ref: "#/components/schemas/ConversationTurn"
+        uploadedDocs:
+          type: array
+          maxItems: 3
+          description: Optional uploaded documents to use as grounded context
+          items:
+            type: object
+            required: [id, name]
+            properties:
+              id:
+                type: string
+              name:
+                type: string
+
+    ConversationTurn:
+      type: object
+      required: [role, content]
+      properties:
+        role:
+          type: string
+          enum: [user, assistant]
+        content:
+          type: string
+          maxLength: 4000
 
     AISection:
       type: object
@@ -337,6 +373,11 @@ components:
           description: The question or topic detected in the transcript that was answered
         answer:
           type: string
+        questionType:
+          type: string
+        domain:
+          type: string
+          description: Detected response domain
         suggestions:
           type: array
           items:

@@ -12,8 +12,8 @@ contextBridge.exposeInMainWorld("hikaElectron", {
   getApiUrl: (): Promise<string> =>
     ipcRenderer.invoke("get-api-url"),
 
-  getGoogleClientId: (): Promise<string> =>
-    ipcRenderer.invoke("get-google-client-id"),
+  getWebAppUrl: (): Promise<string> =>
+    ipcRenderer.invoke("get-web-app-url"),
 
   isDevelopment: (): Promise<boolean> =>
     ipcRenderer.invoke("is-development"),
@@ -82,7 +82,7 @@ declare global {
   interface Window {
     hikaElectron: {
       getApiUrl: () => Promise<string>;
-      getGoogleClientId: () => Promise<string>;
+      getWebAppUrl: () => Promise<string>;
       isDevelopment: () => Promise<boolean>;
       getAppVersion: () => Promise<string>;
       checkForUpdates: () => Promise<boolean>;

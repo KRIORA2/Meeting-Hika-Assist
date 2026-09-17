@@ -6,6 +6,7 @@
 
 // ── State ─────────────────────────────────────────────────────────────────────
 let apiUrl          = "http://localhost:5000";
+let webAppUrl       = "https://hikanest-web-beta.onrender.com";
 let sessionId       = null;
 let sessionStart    = null;
 let timerHandle     = null;
@@ -36,6 +37,10 @@ let audioContext    = null;
 let micAnalyser     = null;
 let clientAnalyser  = null;
 let meterFrame      = null;
+let meterSource     = null;
+let meterCaptureStream = null;
+let silentListenFrames = 0;
+let warnedSilentMic = false;
 let selectedHistoryInsight = null;
 let realtimePeer    = null;
 let realtimeEvents  = null;
@@ -51,6 +56,9 @@ let realtimePartialTranscript = "";
 let realtimeTranscriptFinalized = false;
 let realtimeStopRequested = false;
 let realtimeResponseRequested = false;
+let pendingAnalyzeOnStop = false;
+let answerOnStopLock = false;
+let listenFinalizeTimer = null;
 let forceHttpFallback = false;
 const useRealtimeVoice = true;
 const realtimeMetrics = {};
@@ -59,6 +67,7 @@ let selectedSessionMode = "interview";
 let selectedModel = "gpt-4.1";
 let autoAnswerEnabled = true;
 let saveTranscriptEnabled = true;
+let remainingCredits = null;
 let screenBeforeMinimize = "start";
 let availableUpdateUrl = "";
 let latestUpdateState = null;
@@ -95,6 +104,9 @@ const startBtn       = $("start-btn");
 const hdrTitle       = $("hdr-title");
 const hdrTimer       = $("hdr-timer");
 const statusDot      = $("status-dot");
+const creditsBadge   = $("credits-badge");
+const setupCredits   = $("setup-credits");
+const startCredits   = $("start-credits");
 const meetingBadge   = $("meeting-badge");
 const recIndicator   = $("rec-indicator");
 const txScroll       = $("tx-scroll");
@@ -105,6 +117,8 @@ const aiScroll       = $("ai-scroll");
 const historyStrip   = $("history-strip");
 const historyList    = $("history-list");
 const micBtn         = $("mic-btn");
+const micLabel       = $("mic-label");
+const micHint        = $("mic-hint");
 const micSource      = $("mic-source");
 const meterMicFill   = $("meter-mic-fill");
 const meterClientFill = $("meter-client-fill");
@@ -127,6 +141,8 @@ const wndCloseBtn    = $("wnd-close-btn");
 const splashScreen   = $("splash-screen");
 const googleSigninScreen = $("google-signin-screen");
 const continueGoogleBtn = $("continue-google-btn");
+const continueEmailBtn = $("continue-email-btn");
+const desktopSigninStatus = $("desktop-signin-status");
 const minimizedLauncher = $("minimized-launcher");
 const jobPostUrl      = $("job-post-url");
 const modelSelect     = $("model-select");
@@ -140,8 +156,8 @@ const accountMenu = $("account-menu");
 const accountMenuEmail = $("account-menu-email");
 const checkUpdateBtn = $("check-update-btn");
 const downloadUpdateBtn = $("download-update-btn");
+const installUpdateBtn = $("install-update-btn");
 const updateStatus = $("update-status");
-const privateOverlay = $("private-overlay");
 const updateNotification = $("update-notification");
 const updateNotificationTitle = $("update-notification-title");
 const updateNotificationMessage = $("update-notification-message");
@@ -155,8 +171,13 @@ const updateNowBtn = $("update-now-btn");
 async function init() {
   if (window.hikaElectron) {
     apiUrl = await window.hikaElectron.getApiUrl();
+    webAppUrl = await window.hikaElectron.getWebAppUrl();
     realtimeDiagnostics = await window.hikaElectron.isDevelopment();
     window.hikaElectron.pin();
+    const installedVersion = await window.hikaElectron.getAppVersion();
+    if (updateStatus && !latestUpdateState) {
+      updateStatus.textContent = `HikaNest ${installedVersion}. Check GitHub Releases for updates.`;
+    }
 
     // Listen for meeting auto-detection from main process
     window.hikaElectron.onMeetingDetected(name => {
@@ -180,8 +201,12 @@ async function init() {
   $("setup-start-btn")?.addEventListener("click", handleStart);
   $("setup-btn")?.addEventListener("click", showSetupScreen);
   $("setup-back-btn")?.addEventListener("click", showStartScreen);
-  continueGoogleBtn?.addEventListener("click", () => openWebHandoff());
+  continueGoogleBtn?.addEventListener("click", () => { void openWebHandoff("google"); });
+  continueEmailBtn?.addEventListener("click", () => { void openWebHandoff(); });
   meetingNameEl.addEventListener("keydown", e => { if (e.key === "Enter") handleStart(); });
+  setupMeetingNameEl?.addEventListener("keydown", e => {
+    if (e.key === "Enter") void handleStart();
+  });
   document.querySelectorAll(".mode-choice").forEach((button) => {
     button.addEventListener("click", () => {
       selectedSessionMode = button.dataset.mode || "interview";
@@ -201,31 +226,33 @@ async function init() {
   minimizedLauncher?.addEventListener("click", restoreFromLauncher);
   accountMenuBtn?.addEventListener("click", (event) => {
     event.stopPropagation();
+    const opening = accountMenu.hidden;
     accountMenu.hidden = !accountMenu.hidden;
+    if (opening && !accountMenu.hidden) void checkForUpdates();
   });
-  checkUpdateBtn?.addEventListener("click", checkForUpdates);
-  downloadUpdateBtn?.addEventListener("click", () => {
-    void startUpdateDownload();
-  });
+  checkUpdateBtn?.addEventListener("click", () => { void checkForUpdates(); });
+  downloadUpdateBtn?.addEventListener("click", () => { void startUpdateDownload(); });
+  installUpdateBtn?.addEventListener("click", () => { void installDownloadedUpdate(); });
   $("open-dashboard-btn")?.addEventListener("click", () => {
     closeAccountMenu();
-    showToast("Dashboard URL is configured on the web app.");
+    void window.hikaElectron?.openExternal(`${webAppUrl}/dashboard`);
   });
   $("menu-logout-btn")?.addEventListener("click", async () => {
     closeAccountMenu();
+    try {
+      await api("POST", "/api/auth/logout");
+    } catch (err) {
+      console.warn("Server logout failed; clearing local session", err);
+    }
     await clearAuthSession();
     await clearAuthToken();
-    showSetupScreen();
+    showGoogleSigninScreen();
   });
   updateLaterBtn?.addEventListener("click", () => {
     updateNotification.hidden = true;
   });
   updateNowBtn?.addEventListener("click", () => { void handleUpdateAction(); });
   window.hikaElectron?.onUpdateState(renderUpdateState);
-  privateOverlay?.addEventListener("change", () => {
-    if (!privateOverlay.checked) showToast("Screen-share protection remains enabled for safety.");
-    privateOverlay.checked = true;
-  });
   if (wndCloseBtn) {
     wndCloseBtn.addEventListener("click", () => window.hikaElectron?.close());
   }
@@ -233,7 +260,16 @@ async function init() {
     if (!accountMenu.hidden && !accountMenuWrap?.contains(event.target)) closeAccountMenu();
   });
   askBtn.addEventListener("click", handleManualAsk);
-  askInput.addEventListener("keydown", e => { if (e.key === "Enter") handleManualAsk(); });
+  liveTxText.addEventListener("input", () => {
+    micTranscriptText = liveTxText.value.trim();
+    transcriptReadyForAsk = Boolean(micTranscriptText);
+  });
+  askInput.addEventListener("keydown", e => {
+    if (e.key === "Enter" && !e.shiftKey && !e.isComposing) {
+      e.preventDefault();
+      void handleManualAsk();
+    }
+  });
   exportBtn.addEventListener("click", exportSession);
   langFilterSel.addEventListener("change", () => { langFilter = langFilterSel.value; renderInsights(); });
   const docUpload = $("doc-upload");
@@ -269,6 +305,7 @@ async function init() {
 
   await loadAuthSession();
   await loadAuthToken();
+  void refreshCredits();
 
   // Toolbar controls
   opacitySlider.addEventListener("input", () => {
@@ -308,6 +345,11 @@ async function init() {
       toggleClickThrough();
       showToast(`Click-through ${clickThrough ? "On" : "Off"}`);
     }
+
+    if (e.ctrlKey && e.code === "Space" && sessionScreen.style.display !== "none") {
+      e.preventDefault();
+      void toggleRecording();
+    }
   });
 }
 
@@ -315,10 +357,89 @@ function closeAccountMenu() {
   if (accountMenu) accountMenu.hidden = true;
 }
 
+function setTranscriptDraft(value, { syncAsk = false } = {}) {
+  liveTxText.value = value;
+  if (syncAsk) askInput.value = value;
+}
+
+function setCredits(value) {
+  remainingCredits = typeof value === "number" ? value : remainingCredits;
+  const label = remainingCredits == null ? "— credits" : `${remainingCredits} credits`;
+  [creditsBadge, setupCredits, startCredits].forEach((el) => {
+    if (!el) return;
+    el.textContent = label;
+    el.classList.toggle("low", remainingCredits != null && remainingCredits < 10);
+  });
+}
+
+async function refreshCredits() {
+  if (!authToken) return;
+  try {
+    const me = await api("GET", "/api/me");
+    if (typeof me?.credits === "number") setCredits(me.credits);
+  } catch {
+    // Credits are informational; the next AI call will report 402 if empty.
+  }
+}
+
+function currentTranscript() {
+  return (liveTxText.value || micTranscriptText || latestUtterance || "").replace(/\s+/g, " ").trim();
+}
+
+function setLiveBadge(text, kind = "") {
+  liveTxLabel.textContent = text;
+  liveTxLabel.className = kind ? `live-badge ${kind}` : "live-badge";
+}
+
+function setListeningUI(listening) {
+  micBtn.classList.toggle("recording", listening);
+  micBtn.textContent = listening ? "⏹" : "🎤";
+  micBtn.title = listening ? "Stop and answer" : "Start listening";
+  askInput.classList.toggle("recording", listening);
+  if (micLabel) micLabel.textContent = listening ? "Stop" : "Listen";
+  if (micHint) micHint.textContent = listening ? "Release to answer" : "Capture audio";
+  if (recIndicator) recIndicator.hidden = !listening;
+  liveTxEl.classList.toggle("listening", listening);
+  if (listening) setLiveBadge("● LIVE", "live");
+}
+
+function resetSessionStage() {
+  liveTxText.value = "";
+  askInput.value = "";
+  setListeningUI(false);
+  setLiveBadge("Ready");
+  liveTxEl.style.display = "flex";
+  txScroll.innerHTML = "";
+  aiScroll.innerHTML = emptyHint("✦", "Press Listen, then Stop — the answer appears here");
+  historyStrip.style.display = "none";
+  historyList.innerHTML = "";
+  statusDot.textContent = "● Ready";
+  statusDot.className = "status-dot";
+}
+
+async function waitForTranscriptionIdle(ms = 4000) {
+  const started = Date.now();
+  while (isTranscribing && Date.now() - started < ms) {
+    await new Promise((resolve) => setTimeout(resolve, 60));
+  }
+}
+
 async function uploadDocuments(files, listElement) {
   if (!files || files.length === 0) return;
+  if (uploadedDocs.length + files.length > 3) {
+    showToast("Use up to 3 documents in a session.");
+    return;
+  }
+  if (Array.from(files).reduce((total, file) => total + file.size, 0) > 15 * 1024 * 1024) {
+    showToast("Combined document size must be under 15 MB.");
+    return;
+  }
   const toUpload = [];
   for (const file of files) {
+    if (file.size > 10 * 1024 * 1024) {
+      showToast(`${file.name} is larger than 10 MB.`);
+      return;
+    }
     const bytes = new Uint8Array(await file.arrayBuffer());
     let binary = "";
     for (let index = 0; index < bytes.length; index += 0x8000) {
@@ -330,9 +451,11 @@ async function uploadDocuments(files, listElement) {
     const response = await api("POST", "/api/documents", { files: toUpload });
     for (const file of response?.files || []) uploadedDocs.unshift({ id: file.id, name: file.name });
     if (listElement) listElement.textContent = uploadedDocs.length ? `${uploadedDocs.length} document${uploadedDocs.length === 1 ? "" : "s"} added` : "No documents added";
+    showToast(`${response?.files?.length || 0} document(s) added.`);
   } catch (error) {
     console.error("upload error", error);
     if (listElement) listElement.textContent = "Upload failed";
+    showToast("Document upload failed.");
   }
 }
 
@@ -387,8 +510,28 @@ function restoreFromLauncher() {
   }
 }
 
-function openWebHandoff() {
-  window.hikaElectron?.openExternal("https://hikanest-web-beta.onrender.com/login?next=%2Fdesktop-connect");
+async function openWebHandoff(provider) {
+  if (!window.hikaElectron) return;
+  if (continueGoogleBtn) continueGoogleBtn.disabled = true;
+  if (continueEmailBtn) continueEmailBtn.disabled = true;
+  desktopSigninStatus.className = "desktop-signin-status waiting";
+  desktopSigninStatus.textContent = provider === "google"
+    ? "Opening Google sign-in in your browser…"
+    : "Opening your secure browser sign-in…";
+  try {
+    const next = provider === "google"
+      ? `${webAppUrl}/login?next=%2Fdesktop-connect&provider=google`
+      : `${webAppUrl}/login?next=%2Fdesktop-connect`;
+    const opened = await window.hikaElectron.openExternal(next);
+    if (!opened) throw new Error("The browser could not be opened.");
+    desktopSigninStatus.textContent = "Waiting for browser authentication. This window will continue automatically.";
+  } catch {
+    desktopSigninStatus.className = "desktop-signin-status error";
+    desktopSigninStatus.textContent = "Could not open your browser. Check your default browser and try again.";
+  } finally {
+    if (continueGoogleBtn) continueGoogleBtn.disabled = false;
+    if (continueEmailBtn) continueEmailBtn.disabled = false;
+  }
 }
 
 function compareVersions(left, right) {
@@ -401,24 +544,31 @@ function compareVersions(left, right) {
   return 0;
 }
 
+function setUpdateActionButtons(state) {
+  if (downloadUpdateBtn) downloadUpdateBtn.hidden = state !== "update-available";
+  if (installUpdateBtn) installUpdateBtn.hidden = state !== "update-downloaded";
+}
+
 function renderUpdateState(payload) {
   latestUpdateState = payload;
   const currentVersion = payload.currentVersion || "current version";
   const nextVersion = payload.version || "the latest version";
 
   if (payload.state === "checking") {
-    updateStatus.textContent = "Checking for updates...";
+    setUpdateActionButtons(payload.state);
+    updateStatus.textContent = "Checking GitHub Releases for updates...";
     return;
   }
 
   if (payload.state === "up-to-date") {
+    setUpdateActionButtons(payload.state);
     updateStatus.textContent = `HikaNest ${currentVersion} is up to date.`;
-    downloadUpdateBtn.hidden = true;
     updateNotification.hidden = true;
     return;
   }
 
   if (payload.state === "error") {
+    setUpdateActionButtons(payload.state);
     updateStatus.textContent = payload.message || "Could not check for updates.";
     updateNotification.hidden = true;
     return;
@@ -426,15 +576,16 @@ function renderUpdateState(payload) {
 
   updateNotification.hidden = false;
   if (payload.state === "update-available") {
+    setUpdateActionButtons(payload.state);
     updateNotificationTitle.textContent = "New update available";
-    updateNotificationMessage.textContent = `HikaNest ${nextVersion} is available. You are currently using ${currentVersion}.`;
+    updateNotificationMessage.textContent = `HikaNest ${nextVersion} is available. You are currently using ${currentVersion}. Open the ⋮ menu to download it.`;
     updateProgressWrap.hidden = true;
-    updateNowBtn.textContent = "Update Now";
+    updateNowBtn.textContent = "Download update";
     updateNowBtn.disabled = false;
     updateLaterBtn.hidden = false;
-    downloadUpdateBtn.hidden = false;
-    updateStatus.textContent = `Version ${nextVersion} is available.`;
+    updateStatus.textContent = `Version ${nextVersion} is available. Download it from this menu.`;
   } else if (payload.state === "downloading") {
+    setUpdateActionButtons(payload.state);
     const percent = Math.round(payload.percent ?? 0);
     updateNotificationTitle.textContent = "Downloading HikaNest update...";
     updateNotificationMessage.textContent = `HikaNest ${nextVersion} is downloading. You can keep using the app.`;
@@ -445,29 +596,41 @@ function renderUpdateState(payload) {
     updateLaterBtn.hidden = true;
     updateStatus.textContent = `Downloading update... ${percent}%`;
   } else if (payload.state === "update-downloaded") {
+    setUpdateActionButtons(payload.state);
     updateNotificationTitle.textContent = "Update ready";
     updateNotificationMessage.textContent = sessionId
       ? `Update downloaded. Restart HikaNest when you're ready to finish your session.`
-      : `HikaNest ${nextVersion} is ready to install.`;
+      : `HikaNest ${nextVersion} is ready to install. Use Install update & restart.`;
     updateProgressWrap.hidden = true;
-    updateNowBtn.textContent = "Restart & Update";
+    updateNowBtn.textContent = "Install & restart";
     updateNowBtn.disabled = false;
     updateLaterBtn.hidden = false;
-    downloadUpdateBtn.hidden = true;
-    updateStatus.textContent = sessionId ? "Update ready after this session." : "Update ready to install.";
+    updateStatus.textContent = sessionId ? "Update ready after this session." : "Update ready. Install from this menu.";
   }
 }
 
 async function checkForUpdates() {
-  closeAccountMenu();
-  if (!window.hikaElectron?.checkForUpdates) return;
+  if (!window.hikaElectron?.checkForUpdates) {
+    updateStatus.textContent = "Updates are available in the installed desktop app.";
+    return;
+  }
   await window.hikaElectron.checkForUpdates();
 }
 
 async function startUpdateDownload() {
-  closeAccountMenu();
   if (latestUpdateState?.state !== "update-available" || !window.hikaElectron?.downloadUpdate) return;
   await window.hikaElectron.downloadUpdate();
+}
+
+async function installDownloadedUpdate() {
+  if (latestUpdateState?.state !== "update-downloaded" || !window.hikaElectron?.installUpdate) return;
+  const result = await window.hikaElectron.installUpdate();
+  if (!result.ok) {
+    updateNotification.hidden = false;
+    updateNotificationMessage.textContent = "Update downloaded. Restart HikaNest when you're ready.";
+    updateStatus.textContent = "Finish your session, then install the update.";
+    showToast("Finish your active session before restarting.");
+  }
 }
 
 async function handleUpdateAction() {
@@ -475,12 +638,8 @@ async function handleUpdateAction() {
     await startUpdateDownload();
     return;
   }
-  if (latestUpdateState?.state !== "update-downloaded" || !window.hikaElectron?.installUpdate) return;
-  const result = await window.hikaElectron.installUpdate();
-  if (!result.ok) {
-    updateNotification.hidden = false;
-    updateNotificationMessage.textContent = "Update downloaded. Restart HikaNest when you're ready.";
-    showToast("Finish your active session before restarting.");
+  if (latestUpdateState?.state === "update-downloaded") {
+    await installDownloadedUpdate();
   }
 }
 
@@ -525,7 +684,10 @@ function initResize() {
 
 // ── Export session ─────────────────────────────────────────────────────────────
 function exportSession() {
-  if (!transcriptChunks.length && !insights.length) return;
+  if (!transcriptChunks.length && !insights.length) {
+    showToast("Nothing to export yet.");
+    return;
+  }
 
   const lines = [];
   const title = hdrTitle.textContent || "Meeting";
@@ -576,10 +738,14 @@ async function handleStart() {
   const jobContext = (jobPostUrl?.value || "").trim();
   const languageContext = outputLanguage?.value ? `Respond in ${outputLanguage.value}.` : "";
   sessionGuidance = [
-    selectedSessionMode === "interview" ? "This is an interview. Answer as a confident, experienced candidate." : "This is a regular professional call.",
-    jobContext ? `Job post URL supplied by the user: ${jobContext}` : "",
+    "Write as this person in first person. Match their domain (data engineer, backend, ML, etc.) from the resume and the prompt below.",
+    "Show the answer on screen in a natural conversational tone, like a human typing what they would say. Example: 'Yeah that's a nice one actually — so the dataflow is...'. Never use voice or read answers aloud.",
+    selectedSessionMode === "interview" ? "This is an interview. Answer as the candidate." : "This is a regular professional call. Answer as this person.",
+    jobContext ? `Job description / role context:\n${jobContext}` : "",
     languageContext,
-    (sessionGuidanceEl?.value || "").trim(),
+    (sessionGuidanceEl?.value || "").trim()
+      ? `User persona prompt (follow strictly):\n${(sessionGuidanceEl?.value || "").trim()}`
+      : "If a resume is uploaded, review it and answer as that professional.",
   ].filter(Boolean).join("\n");
   forceHttpFallback = false;
   cancelledRealtimeResponseIds.clear();
@@ -587,7 +753,7 @@ async function handleStart() {
   startControl.textContent = "Starting...";
 
   try {
-    const res = await api("POST", "/api/sessions", { title, platform: "teams", status: "active" });
+    const res = await api("POST", "/api/sessions", { title, platform: "other", status: "active" });
     sessionId    = res.id;
     sessionStart = Date.now();
     window.hikaElectron?.setUpdateSessionActive(true);
@@ -598,13 +764,16 @@ async function handleStart() {
     sessionScreen.style.display     = "flex";
     sessionScreen.style.flexDirection = "column";
     sessionScreen.style.height      = "100%";
-
+    resetSessionStage();
     startTimer();
+    void ensureMicPermission();
+    void refreshCredits();
+    if (uploadedDocs.length) showToast("Resume and documents loaded. Answers stay on screen.");
   } catch (err) {
     startControl.disabled = false;
     startControl.textContent = setupScreen.style.display !== "none" ? "Start session" : "Start Session";
     const msg = err instanceof Error ? err.message : String(err || "");
-    if (msg.includes(" 401:")) {
+    if (err?.status === 401) {
       openWebHandoff();
       alert("Opening web sign-in. After you sign in, Hikanest will return to this session setup page.");
       return;
@@ -617,7 +786,16 @@ async function handleStart() {
 async function handleEnd() {
   if (!sessionId) return;
   if (isRecording) await stopRecording();
-  try { await api("PATCH", `/api/sessions/${sessionId}`, { status: "ended" }); } catch {}
+  try {
+    if (saveTranscriptEnabled) {
+      await api("PATCH", `/api/sessions/${sessionId}`, { status: "ended" });
+    } else {
+      await api("DELETE", `/api/sessions/${sessionId}`);
+    }
+  } catch (err) {
+    console.error("Could not finalize session", err);
+    showToast("Session ended, but history could not be updated.");
+  }
   window.hikaElectron?.setUpdateSessionActive(false);
   sessionId    = null;
   clearInterval(timerHandle);
@@ -627,12 +805,14 @@ async function handleEnd() {
   latestUtterance  = "";
   micTranscriptText = "";
   transcriptReadyForAsk = false;
-
-  txScroll.innerHTML    = emptyHint("🎤", "Tap Record to start");
-  aiScroll.innerHTML    = emptyHint("⚡", "AI answers appear here");
-  historyStrip.style.display  = "none";
-  historyList.innerHTML       = "";
-  liveTxEl.style.display      = "none";
+  pendingAnalyzeOnStop = false;
+  answerOnStopLock = false;
+  if (listenFinalizeTimer) {
+    clearTimeout(listenFinalizeTimer);
+    listenFinalizeTimer = null;
+  }
+  setTranscriptDraft("");
+  resetSessionStage();
   meetingBadge.style.display  = "none";
   sessionScreen.style.display = "none";
   showSetupScreen();
@@ -660,85 +840,80 @@ async function toggleRecording() {
 
 async function startRecording() {
   try {
+    pendingAnalyzeOnStop = false;
+    answerOnStopLock = false;
+    if (listenFinalizeTimer) {
+      clearTimeout(listenFinalizeTimer);
+      listenFinalizeTimer = null;
+    }
     statusDot.textContent = "● Connecting microphone";
     const stream = await buildRecordingStream();
     const track = stream.getAudioTracks()[0];
     if (!track || track.readyState !== "live") throw new Error("No active microphone track was found.");
-    mediaRecorder = new MediaRecorder(stream, { mimeType });
-    audioChunks   = [];
-    let lastAnalyzedText = "";
+    track.enabled = true;
+    warnedSilentMic = false;
+    silentListenFrames = 0;
 
-    // A persistent WebRTC connection avoids serializing and re-uploading an
-    // ever-growing WebM blob every few seconds. If Realtime is unavailable,
-    // retain the existing recorder/transcription workflow as a safe fallback.
+    // Listen-only while the mic is open. Answers fire when the user stops.
+    // Do not construct MediaRecorder on this stream before Realtime starts —
+    // Chromium can starve WebRTC if both grab the same track.
     if (useRealtimeVoice && !forceHttpFallback && await startRealtimeVoice(stream)) {
       isRecording = true;
-      micBtn.classList.add("recording");
-      micBtn.textContent = "⏹";
-      micBtn.title = "Stop recording";
-      askInput.classList.add("recording");
-      recIndicator.style.display = "inline";
-      statusDot.textContent = "● REC";
+      setListeningUI(true);
+      recIndicator.hidden = false;
+      statusDot.textContent = "● Listening";
       statusDot.className = "status-dot rec";
       liveTxEl.style.display = "flex";
-      askInput.value = "";
+      setTranscriptDraft("");
       micTranscriptText = "";
-      liveTxLabel.textContent = "● LIVE";
+      latestUtterance = "";
       transcriptReadyForAsk = false;
       return;
     }
 
-    mediaRecorder.ondataavailable = e => {
+    const recorderOptions = mimeType ? { mimeType } : undefined;
+    mediaRecorder = new MediaRecorder(stream, recorderOptions);
+    audioChunks   = [];
+    mediaRecorder.ondataavailable = (e) => {
       if (e.data && e.data.size > 0) audioChunks.push(e.data);
     };
 
-    // Final transcription when stopped manually
     mediaRecorder.onstop = async () => {
+      await waitForTranscriptionIdle();
       const blob = new Blob(audioChunks, { type: mimeType });
       audioChunks = [];
-      if (blob.size < 800) return;
-      const text = await transcribeBlob(blob);
-      if (text) {
-        latestUtterance = text;
-        micTranscriptText = text;
-        addTranscriptChunk(text);
-        askInput.value = text;
-        liveTxEl.style.display = "flex";
-        liveTxLabel.textContent = "● EDITABLE";
-        transcriptReadyForAsk = true;
-      }
+      let text = "";
+      if (blob.size >= 800) text = await transcribeBlob(blob);
+      text = (text || currentTranscript()).trim();
+      await finishListenAndAnswer(text);
     };
 
-    // ── Faster analysis cadence with less work ─────────────────────────────
     chunkTimer = setInterval(async () => {
-      if (!mediaRecorder || mediaRecorder.state !== "recording" || isTranscribing) return;
+      if (!mediaRecorder || mediaRecorder.state !== "recording" || pendingAnalyzeOnStop) return;
       mediaRecorder.requestData();
       const snap = audioChunks.slice();
       if (!snap.length) return;
       const blob = new Blob(snap, { type: mimeType });
       if (blob.size < 1200) return;
       const text = await transcribeBlob(blob);
-      if (!text) return;
+      if (!text || pendingAnalyzeOnStop) return;
 
       latestUtterance = text;
       micTranscriptText = text;
-      askInput.value = text;
+      setTranscriptDraft(text);
       liveTxEl.style.display = "flex";
+    }, 1500);
 
-    }, 2500);
-
-    mediaRecorder.start();
+    mediaRecorder.start(800);
     isRecording = true;
-    micBtn.classList.add("recording");
-    micBtn.textContent        = "⏹";
-    micBtn.title              = "Stop recording";
-    askInput.classList.add("recording");
-    recIndicator.style.display = "inline";
-    statusDot.textContent      = "● REC";
+    setListeningUI(true);
+    recIndicator.hidden = false;
+    statusDot.textContent      = "● Listening";
     statusDot.className        = "status-dot rec";
     liveTxEl.style.display     = "flex";
-    askInput.value             = "";
+    setTranscriptDraft("");
     micTranscriptText = "";
+    latestUtterance = "";
     transcriptReadyForAsk = false;
 
   } catch (err) {
@@ -746,38 +921,43 @@ async function startRecording() {
     alert(`Microphone could not start.\n\n${message}\n\nAllow microphone access for Hikanest in Windows Settings, then select the correct microphone.`);
     statusDot.textContent = "● Mic unavailable";
     statusDot.className = "status-dot";
+    setListeningUI(false);
     stopAudioPipeline();
     console.error(err);
   }
 }
 
 async function stopRecording() {
-  if (!isRecording) return;
+  if (!isRecording && !pendingAnalyzeOnStop) return;
   clearInterval(chunkTimer);
   isRecording = false;
-  micBtn.classList.remove("recording");
-  askInput.classList.remove("recording");
-  micBtn.textContent         = "🎤";
-  micBtn.title               = "Record";
-  recIndicator.style.display = "none";
-  statusDot.textContent      = "● Live";
+  pendingAnalyzeOnStop = true;
+  setListeningUI(false);
+  statusDot.textContent      = "● Capturing";
   statusDot.className        = "status-dot";
+  setLiveBadge("Capturing", "captured");
 
   if (realtimePeer?.connectionState === "connected" && realtimeEvents?.readyState === "open") {
-    statusDot.textContent = "● Finalizing transcript";
     realtimeStopRequested = true;
     realtimeResponseRequested = false;
-    mediaRecorder?.stream.getTracks().forEach(t => t.stop());
-    stopAudioPipeline();
     if (realtimeEvents?.readyState === "open") {
       realtimeEvents.send(JSON.stringify({ type: "input_audio_buffer.commit" }));
     }
+    mediaRecorder?.stream.getTracks().forEach(t => t.stop());
+    stopAudioPipeline();
+    if (listenFinalizeTimer) clearTimeout(listenFinalizeTimer);
+    listenFinalizeTimer = setTimeout(() => {
+      void finishListenAndAnswer();
+    }, realtimeTranscriptFinalized ? 350 : 2800);
     return;
   }
 
   if (mediaRecorder && mediaRecorder.state !== "inactive") {
+    await waitForTranscriptionIdle(1500);
     mediaRecorder.stop();
     mediaRecorder.stream.getTracks().forEach(t => t.stop());
+  } else {
+    await finishListenAndAnswer();
   }
   mediaRecorder = null;
   stopAudioPipeline();
@@ -797,6 +977,53 @@ function stopRealtimeVoice(closedByUser = true) {
   realtimeTranscriptFinalized = false;
   realtimeStopRequested = false;
   realtimeResponseRequested = false;
+}
+
+async function finishListenAndAnswer(sourceText) {
+  if (answerOnStopLock) return;
+  answerOnStopLock = true;
+  if (listenFinalizeTimer) {
+    clearTimeout(listenFinalizeTimer);
+    listenFinalizeTimer = null;
+  }
+  pendingAnalyzeOnStop = false;
+  stopRealtimeVoice();
+
+  const text = (sourceText || currentTranscript()).trim();
+  if (!text) {
+    setLiveBadge("No speech");
+    statusDot.textContent = "● Ready";
+    statusDot.className = "status-dot";
+    showToast("No speech captured. Press Listen and speak, then Stop.");
+    answerOnStopLock = false;
+    return;
+  }
+
+  latestUtterance = text;
+  micTranscriptText = text;
+  setTranscriptDraft(text);
+  setLiveBadge("Captured", "captured");
+  addTranscriptChunk(text);
+  transcriptReadyForAsk = false;
+  statusDot.textContent = "⚡ Answering";
+  statusDot.className = "status-dot ai";
+  setLiveBadge("Answering", "answering");
+
+  try {
+    if (autoAnswerEnabled) {
+      await analyze(text);
+    } else {
+      transcriptReadyForAsk = true;
+      askInput.value = text;
+      askInput.focus();
+      showToast("Transcript ready — press Ask to generate an answer.");
+      statusDot.textContent = "● Ready";
+      statusDot.className = "status-dot";
+      setLiveBadge("Captured", "captured");
+    }
+  } finally {
+    answerOnStopLock = false;
+  }
 }
 
 async function startRealtimeVoice(stream, reconnect = false) {
@@ -819,6 +1046,7 @@ async function startRealtimeVoice(stream, reconnect = false) {
   realtimeTranscriptFinalized = false;
 
   const showRealtimeAnswer = (answer, complete = false) => {
+    if (isRecording && !realtimeStopRequested) return;
     const text = (answer || "").trim();
     if (!text) return;
     const insight = {
@@ -847,12 +1075,12 @@ async function startRealtimeVoice(stream, reconnect = false) {
       statusDot.textContent = "● Speech detected";
     } else if (payload.type === "input_audio_buffer.speech_stopped") {
       markRealtimeMetric("speech_stopped");
-      statusDot.textContent = "● Understanding";
+      statusDot.textContent = realtimeStopRequested ? "● Capturing" : "● Listening";
     } else if (payload.type === "conversation.item.input_audio_transcription.delta") {
       if (payload.delta) markRealtimeMetric("first_transcript_delta");
       realtimePartialTranscript += payload.delta || "";
       realtimeTranscriptFinalized = false;
-      askInput.value = [micTranscriptText, realtimePartialTranscript].filter(Boolean).join(" ");
+      setTranscriptDraft([micTranscriptText, realtimePartialTranscript].filter(Boolean).join(" "));
     } else if (payload.type === "conversation.item.input_audio_transcription.completed") {
       const text = (payload.transcript || realtimePartialTranscript || "").trim();
       if (text) {
@@ -860,16 +1088,19 @@ async function startRealtimeVoice(stream, reconnect = false) {
         micTranscriptText = micTranscriptText
           ? `${micTranscriptText} ${text}`.replace(/\s+/g, " ").trim()
           : text;
-        addTranscriptChunk(text);
-        askInput.value = micTranscriptText;
-        liveTxLabel.textContent = "● EDITABLE";
+        setTranscriptDraft(micTranscriptText);
+        if (isRecording && !realtimeStopRequested) setLiveBadge("● LIVE", "live");
+        else setLiveBadge("Captured", "captured");
       }
       realtimePartialTranscript = text;
       realtimeTranscriptFinalized = Boolean(text);
       if (text) transcriptReadyForAsk = true;
       markRealtimeMetric("transcript_completed");
-      if (realtimeStopRequested) stopRealtimeVoice();
+      if (realtimeStopRequested || pendingAnalyzeOnStop) {
+        void finishListenAndAnswer(micTranscriptText || text);
+      }
     } else if (payload.type === "response.created") {
+      if (isRecording && !realtimeStopRequested) return;
       markRealtimeMetric("response_created");
       realtimeResponseId = payload.response?.id || payload.response_id || null;
       realtimeAnswer = "";
@@ -893,8 +1124,10 @@ async function startRealtimeVoice(stream, reconnect = false) {
       showRealtimeAnswer(text, true);
       realtimeResponseId = null;
       markRealtimeMetric("response_completed");
-      statusDot.textContent = isRecording ? "● REC" : "● Live";
-      if (realtimeStopRequested || !isRecording) stopRealtimeVoice();
+      statusDot.textContent = isRecording ? "● Listening" : "● Ready";
+      if ((realtimeStopRequested || pendingAnalyzeOnStop) && !answerOnStopLock) {
+        void finishListenAndAnswer();
+      }
     }
   });
 
@@ -931,7 +1164,14 @@ async function startRealtimeVoice(stream, reconnect = false) {
   events.addEventListener("error", scheduleReconnect);
 
   try {
-    stream.getAudioTracks().forEach(track => peer.addTrack(track, stream));
+    stream.getAudioTracks().forEach((track) => {
+      track.enabled = true;
+      peer.addTrack(track, stream);
+    });
+    peer.addEventListener("track", (event) => {
+      event.track.enabled = false;
+      event.track.stop();
+    });
     const offer = await peer.createOffer();
     await peer.setLocalDescription(offer);
     const authorization = await fetch(apiUrl + "/api/openai/realtime/session", {
@@ -940,7 +1180,12 @@ async function startRealtimeVoice(stream, reconnect = false) {
         "Content-Type": "application/json",
         ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}),
       },
-      body: JSON.stringify({ sessionGuidance, mode: selectedSessionMode === "call" ? "meeting" : "interview", uploadedDocs }),
+      body: JSON.stringify({
+        sessionGuidance,
+        mode: selectedSessionMode === "call" ? "meeting" : "interview",
+        autoAnswer: false,
+        uploadedDocs,
+      }),
     });
     if (!authorization.ok) throw new Error(`Realtime authorization failed (${authorization.status})`);
     const { clientSecret } = await authorization.json();
@@ -952,6 +1197,7 @@ async function startRealtimeVoice(stream, reconnect = false) {
     });
     if (!res.ok) throw new Error(`Realtime setup failed (${res.status})`);
     await peer.setRemoteDescription({ type: "answer", sdp: await res.text() });
+    void refreshCredits();
     return true;
   } catch (error) {
     console.warn("Realtime voice unavailable; using recording fallback.", error);
@@ -981,11 +1227,24 @@ function computeLevel(analyser) {
 
 function startMeters() {
   if (meterFrame) cancelAnimationFrame(meterFrame);
+  silentListenFrames = 0;
   const tick = () => {
     const micLevel = computeLevel(micAnalyser);
     const clientLevel = computeLevel(clientAnalyser);
     if (meterMicFill) meterMicFill.style.width = `${Math.max(2, Math.round(micLevel * 100))}%`;
     if (meterClientFill) meterClientFill.style.width = `${Math.max(2, Math.round(clientLevel * 100))}%`;
+    if (isRecording) {
+      if (micLevel < 0.02) silentListenFrames += 1;
+      else {
+        silentListenFrames = 0;
+        warnedSilentMic = false;
+      }
+      if (!warnedSilentMic && silentListenFrames > 180) {
+        warnedSilentMic = true;
+        showToast("Mic is silent. Choose another input or allow microphone access in Windows.");
+        statusDot.textContent = "● Mic silent";
+      }
+    }
     meterFrame = requestAnimationFrame(tick);
   };
   meterFrame = requestAnimationFrame(tick);
@@ -999,27 +1258,57 @@ function stopMeters() {
 }
 
 async function getMicStream() {
-  if (micStream) return micStream;
-  const constraints = {
-    audio: selectedDeviceId
-      ? {
-          deviceId: { exact: selectedDeviceId },
-          echoCancellation: true,
-          noiseSuppression: true,
-          autoGainControl: true,
-          channelCount: 1,
-          sampleRate: 48000,
-        }
-      : {
-          echoCancellation: true,
-          noiseSuppression: true,
-          autoGainControl: true,
-          channelCount: 1,
-          sampleRate: 48000,
-        },
+  const existing = micStream?.getAudioTracks?.()[0];
+  if (existing && existing.readyState === "live") {
+    existing.enabled = true;
+    return micStream;
+  }
+  if (micStream) {
+    micStream.getTracks().forEach((track) => track.stop());
+    micStream = null;
+  }
+
+  const base = {
+    echoCancellation: true,
+    noiseSuppression: true,
+    autoGainControl: true,
   };
-  micStream = await navigator.mediaDevices.getUserMedia(constraints);
-  return micStream;
+  const attempts = [];
+  if (selectedDeviceId) attempts.push({ audio: { ...base, deviceId: { ideal: selectedDeviceId } } });
+  attempts.push({ audio: base });
+  attempts.push({ audio: true });
+
+  let lastError = null;
+  for (const constraints of attempts) {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia(constraints);
+      const track = stream.getAudioTracks()[0];
+      if (!track || track.readyState !== "live") {
+        stream.getTracks().forEach((item) => item.stop());
+        continue;
+      }
+      track.enabled = true;
+      track.onended = () => {
+        if (micStream === stream) micStream = null;
+      };
+      micStream = stream;
+      return micStream;
+    } catch (err) {
+      lastError = err;
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error("Microphone access failed.");
+}
+
+async function ensureMicPermission() {
+  try {
+    const probe = await navigator.mediaDevices.getUserMedia({ audio: true });
+    probe.getTracks().forEach((track) => track.stop());
+    if (statusDot && !isRecording) statusDot.textContent = "● Mic ready";
+  } catch {
+    if (statusDot) statusDot.textContent = "● Allow mic";
+    showToast("Allow microphone access for Hikanest, then press Listen.");
+  }
 }
 
 async function getSystemAudioStream() {
@@ -1043,50 +1332,48 @@ async function getSystemAudioStream() {
 async function buildRecordingStream() {
   const mic = await getMicStream();
   const micTrack = mic.getAudioTracks()[0];
-  if (!micTrack) throw new Error("No microphone track");
-
-  const sysTrack = null;
+  if (!micTrack || micTrack.readyState !== "live") throw new Error("No microphone track");
+  micTrack.enabled = true;
 
   const Ctx = window.AudioContext || window.webkitAudioContext;
-  audioContext = new Ctx({ sampleRate: 48000 });
-  const dest = audioContext.createMediaStreamDestination();
+  if (!audioContext || audioContext.state === "closed") audioContext = new Ctx();
+  if (audioContext.state === "suspended") await audioContext.resume();
 
-  const micSrc = audioContext.createMediaStreamSource(new MediaStream([micTrack]));
-  const micGain = audioContext.createGain();
-  micGain.gain.value = 1.1;
-  micAnalyser = audioContext.createAnalyser();
-  micAnalyser.fftSize = 1024;
-  micSrc.connect(micGain);
-  micGain.connect(dest);
-  micGain.connect(micAnalyser);
-
-  if (sysTrack) {
-    const sysSrc = audioContext.createMediaStreamSource(new MediaStream([sysTrack]));
-    const sysGain = audioContext.createGain();
-    sysGain.gain.value = 1.3;
-    clientAnalyser = audioContext.createAnalyser();
-    clientAnalyser.fftSize = 1024;
-    sysSrc.connect(sysGain);
-    sysGain.connect(dest);
-    sysGain.connect(clientAnalyser);
-  } else {
-    clientAnalyser = null;
+  if (meterSource) {
+    try { meterSource.disconnect(); } catch { /* already disconnected */ }
+    meterSource = null;
   }
+  if (meterCaptureStream) {
+    meterCaptureStream.getTracks().forEach((track) => track.stop());
+    meterCaptureStream = null;
+  }
+  const meterTrack = typeof micTrack.clone === "function" ? micTrack.clone() : micTrack;
+  meterCaptureStream = new MediaStream([meterTrack]);
+  meterSource = audioContext.createMediaStreamSource(meterCaptureStream);
+  micAnalyser = audioContext.createAnalyser();
+  micAnalyser.fftSize = 2048;
+  meterSource.connect(micAnalyser);
+  clientAnalyser = null;
 
-  mixedStream = dest.stream;
+  mixedStream = mic;
   startMeters();
-  return mixedStream;
+  return mic;
 }
 
 function stopAudioPipeline() {
   stopMeters();
   micAnalyser = null;
   clientAnalyser = null;
-
-  if (mixedStream) {
-    mixedStream.getTracks().forEach(t => t.stop());
-    mixedStream = null;
+  meterSource = null;
+  if (meterCaptureStream) {
+    meterCaptureStream.getTracks().forEach((track) => track.stop());
+    meterCaptureStream = null;
   }
+
+  if (mixedStream && mixedStream !== micStream) {
+    mixedStream.getTracks().forEach(t => t.stop());
+  }
+  mixedStream = null;
   if (systemStream) {
     systemStream.getTracks().forEach(t => t.stop());
     systemStream = null;
@@ -1103,7 +1390,7 @@ function stopAudioPipeline() {
 
 // ── Transcription ─────────────────────────────────────────────────────────────
 async function transcribeBlob(blob) {
-  if (isTranscribing) return "";
+  await waitForTranscriptionIdle(6000);
   isTranscribing = true;
 
   const b64 = await blobToBase64(blob);
@@ -1124,7 +1411,7 @@ async function transcribeBlob(blob) {
 
 // ── AI Analysis ───────────────────────────────────────────────────────────────
 async function analyze(utterance) {
-  if (!utterance || isAnalyzing) return;
+  if (!utterance || isAnalyzing) return false;
   isAnalyzing = true;
   setAnalyzing(true);
 
@@ -1138,8 +1425,8 @@ async function analyze(utterance) {
     `ANSWER THIS: "${utterance}"`,
     sessionGuidance ? `Session guidance: ${sessionGuidance}` : "",
     codeRequest
-      ? "Return complete executable code first. Do not use interview-answer headings, resume matches, tips, or prose templates. Include only a brief explanation after the code when necessary."
-      : "Give a detailed, natural answer the candidate can say aloud. Speak in confident first person only when supported by the uploaded resume or context. Include concrete responsibilities, technical decisions, impact, and one relevant example. Never invent experience.",
+      ? "Return complete executable code first, then a short spoken explanation."
+      : "Write the answer on screen as this person, in natural conversational English. First person. Use the resume, JD, and persona prompt. Human tone, e.g. 'Yeah that's a nice one actually — so the dataflow is...'. Do not speak with voice. Never invent experience.",
     `Timestamp: ${new Date().toISOString()}`,
   ].filter(Boolean).join("\n");
 
@@ -1148,10 +1435,15 @@ async function analyze(utterance) {
       transcript: context,
       sessionId,
       screenshotBase64: screenshotBase64 || undefined,
-      uploadedDocs: uploadedDocs.map(d => ({ id: d.id, name: d.name })),
+      uploadedDocs: uploadedDocs.slice(0, 3).map(d => ({ id: d.id, name: d.name })),
       model: selectedModel,
+      mode: selectedSessionMode === "call" ? "meeting" : "interview",
+      history: insights.slice(0, 8).reverse().flatMap(item => [
+        { role: "user", content: item.question || "" },
+        { role: "assistant", content: item.answer || "" },
+      ]),
     });
-    if (!result) return;
+    if (!result) return false;
 
     const insight = {
       question:    result.question || utterance,
@@ -1171,11 +1463,16 @@ async function analyze(utterance) {
       });
     } catch {}
 
-    insights = [insight];
+    insights = [insight, ...insights].slice(0, 20);
     selectedHistoryInsight = null;
     renderInsights();
+    if (typeof result.credits === "number") setCredits(result.credits);
+    else void refreshCredits();
+    return true;
   } catch (err) {
     console.error("Analyze error", err);
+    showToast("Could not get an answer. Check your connection and try again.");
+    return false;
   } finally {
     isAnalyzing = false;
     setAnalyzing(false);
@@ -1184,19 +1481,21 @@ async function analyze(utterance) {
 
 async function handleManualAsk() {
   if (isRecording) {
-    showToast("Stop the microphone before asking.");
+    showToast("Stop listening first — the answer is generated when you stop the mic.");
     return;
   }
   const typedQuestion = askInput.value.trim();
-  const q = typedQuestion || (transcriptReadyForAsk ? askInput.value.trim() : "");
+  const q = typedQuestion || currentTranscript();
   if (!q || isAnalyzing) return;
   latestUtterance = q;
-  askInput.value = "";
-  if (!transcriptReadyForAsk) addTranscriptChunk(q);
+  if (typedQuestion) askInput.value = "";
+  if (!transcriptReadyForAsk && typedQuestion) addTranscriptChunk(q);
   transcriptReadyForAsk = false;
   askBtn.disabled   = true;
-  await analyze(q);
-  askBtn.disabled   = false;
+  const answered = await analyze(q);
+  if (!answered && typedQuestion) askInput.value = typedQuestion;
+  askBtn.disabled = false;
+  askInput.focus();
 }
 
 // ── Render ─────────────────────────────────────────────────────────────────────
@@ -1213,8 +1512,10 @@ function addTranscriptChunk(text) {
 }
 
 function setAnalyzing(on) {
-  statusDot.textContent = on ? "⚡ AI" : (isRecording ? "● REC" : "● Live");
+  statusDot.textContent = on ? "⚡ Answering" : (isRecording ? "● Listening" : "● Ready");
   statusDot.className   = on ? "status-dot ai" : (isRecording ? "status-dot rec" : "status-dot");
+  if (on) setLiveBadge("Answering", "answering");
+  else if (!isRecording && currentTranscript()) setLiveBadge("Captured", "captured");
 
   const existingRow = aiScroll.querySelector(".analyzing-row");
   if (on && !existingRow) {
@@ -1222,7 +1523,7 @@ function setAnalyzing(on) {
     if (hint) hint.remove();
     const row = document.createElement("div");
     row.className = "analyzing-row";
-    row.innerHTML = `<span class="pulse">⚡</span><span>Thinking…</span>`;
+    row.innerHTML = `<span class="pulse">⚡</span><span>Analyzing transcript…</span>`;
     aiScroll.prepend(row);
   } else if (!on && existingRow) {
     existingRow.remove();
@@ -1232,7 +1533,7 @@ function setAnalyzing(on) {
 function renderInsights() {
   aiScroll.innerHTML = "";
   if (!insights.length) {
-    aiScroll.innerHTML = emptyHint("⚡", "AI answers appear here");
+    aiScroll.innerHTML = emptyHint("✦", "Press Listen, then Stop — the answer appears here");
     return;
   }
 
@@ -1441,8 +1742,15 @@ async function api(method, path, body) {
   if (body) opts.body = JSON.stringify(body);
   const res = await fetch(apiUrl + path, opts);
   if (!res.ok) {
-    const txt = await res.text().catch(() => "");
-    throw new Error(`${method} ${path} → ${res.status}: ${txt}`);
+    const payload = await res.json().catch(() => null);
+    const serverMessage = typeof payload?.error === "string" ? payload.error : "";
+    const error = new Error(serverMessage || `Request failed (${res.status})`);
+    error.status = res.status;
+    if (res.status === 402) {
+      if (typeof payload?.credits === "number") setCredits(payload.credits);
+      showToast(serverMessage || "Not enough credits. Open Pricing in the web app.");
+    }
+    throw error;
   }
   const ct = res.headers.get("content-type") || "";
   if (ct.includes("application/json")) return res.json();
@@ -1555,6 +1863,7 @@ function showSetupScreen() {
   if (startScreen) startScreen.style.display = "none";
   if (sessionScreen) sessionScreen.style.display = "none";
   if (setupScreen) setupScreen.style.display = "block";
+  void refreshCredits();
 }
 
 function showGoogleSigninScreen() {
@@ -1562,6 +1871,10 @@ function showGoogleSigninScreen() {
   if (setupScreen) setupScreen.style.display = "none";
   if (sessionScreen) sessionScreen.style.display = "none";
   if (googleSigninScreen) googleSigninScreen.style.display = "flex";
+  if (desktopSigninStatus) {
+    desktopSigninStatus.className = "desktop-signin-status";
+    desktopSigninStatus.textContent = "A secure, one-time sign-in code connects this app.";
+  }
 }
 
 async function completeDesktopHandoff(code) {
@@ -1570,10 +1883,18 @@ async function completeDesktopHandoff(code) {
     if (!result?.token || !result?.session) throw new Error("Desktop sign-in could not be completed.");
     await setAuthToken(result.token);
     await setAuthSession(result.session);
+    if (desktopSigninStatus) {
+      desktopSigninStatus.className = "desktop-signin-status success";
+      desktopSigninStatus.textContent = "Signed in successfully.";
+    }
     showSetupScreen();
+    void refreshCredits();
   } catch (error) {
-    showSetupScreen();
-    alert(error instanceof Error ? error.message : "Desktop sign-in could not be completed.");
+    showGoogleSigninScreen();
+    if (desktopSigninStatus) {
+      desktopSigninStatus.className = "desktop-signin-status error";
+      desktopSigninStatus.textContent = error instanceof Error ? error.message : "Desktop sign-in could not be completed.";
+    }
   }
 }
 

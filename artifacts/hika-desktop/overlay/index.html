@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <meta http-equiv="Content-Security-Policy"
-    content="default-src 'self' http://localhost:* https://hikanest-api-v1.onrender.com; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://accounts.google.com; connect-src http://localhost:* https://hikanest-api-v1.onrender.com https://api.openai.com https://accounts.google.com https://*.google.com https://*.gstatic.com blob:; frame-src https://accounts.google.com; img-src 'self' data: blob: https://*.gstatic.com https://*.googleusercontent.com; style-src 'self' 'unsafe-inline'; media-src blob: mediastream:" />
+    content="default-src 'self'; script-src 'self'; connect-src http://localhost:* https://hikanest-api-v1.onrender.com https://api.openai.com blob:; frame-src 'none'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; media-src blob: mediastream:; object-src 'none'; base-uri 'none'; form-action 'none'" />
   <title>Hikanest</title>
   <link rel="stylesheet" href="overlay.css" />
 </head>
@@ -21,11 +21,12 @@
     <div id="account-menu" class="account-menu" hidden>
       <p id="account-menu-email" class="account-menu-email">Account</p>
       <button id="check-update-btn" type="button">Check for updates</button>
-      <button id="download-update-btn" type="button" hidden>Download update</button>
+      <button id="download-update-btn" class="update-action" type="button" hidden>Download update</button>
+      <button id="install-update-btn" class="update-action" type="button" hidden>Install update &amp; restart</button>
+      <p id="update-status" class="update-status">Updates install from GitHub Releases.</p>
       <button id="open-dashboard-btn" type="button">Open dashboard</button>
-      <label class="menu-toggle">Private overlay <input id="private-overlay" type="checkbox" checked /><span></span></label>
+      <p class="menu-toggle">Private overlay <strong>On</strong></p>
       <button id="menu-logout-btn" class="menu-danger" type="button">Log out</button>
-      <p id="update-status" class="update-status"></p>
     </div>
   </div>
 
@@ -53,10 +54,31 @@
   </div>
 
   <div id="google-signin-screen" style="display:none">
-    <div class="access-mark"><img src="icon.png" alt="Hikanest" /></div>
-    <h2>Welcome to Hikanest</h2>
-    <p>Continue with your Google account to sync this desktop app.</p>
-    <button id="continue-google-btn" class="google-continue-btn" type="button"><span>G</span> Continue with Google</button>
+    <div class="desktop-auth-card">
+      <div class="desktop-auth-brand">
+        <div class="desktop-auth-logo"><img src="icon.png" alt="" /></div>
+        <span>Hikanest</span>
+      </div>
+      <p class="desktop-auth-eyebrow"><span></span> Secure desktop access</p>
+      <h2>Sign in to your workspace</h2>
+      <p class="desktop-auth-copy">Sign in with Google or email in your browser, then this window continues automatically.</p>
+      <button id="continue-google-btn" class="google-identity-btn" type="button">
+        <span class="google-g" aria-hidden="true">G</span>
+        <span class="desktop-auth-button-copy"><strong>Continue with Google</strong><small>Use your Google account</small></span>
+        <span class="desktop-auth-arrow" aria-hidden="true">›</span>
+      </button>
+      <button id="continue-email-btn" class="google-continue-btn" type="button">
+        <span class="browser-icon" aria-hidden="true">↗</span>
+        <span class="desktop-auth-button-copy"><strong>Continue with email</strong><small>Opens a secure browser sign-in</small></span>
+        <span class="desktop-auth-arrow" aria-hidden="true">›</span>
+      </button>
+      <p id="desktop-signin-status" class="desktop-signin-status" aria-live="polite">A secure, one-time sign-in code connects this app.</p>
+      <div class="desktop-auth-security">
+        <span aria-hidden="true">✓</span>
+        <p><strong>Protected by design</strong><br />Two-minute handoff codes · OS-encrypted session storage</p>
+      </div>
+    </div>
+    <p class="desktop-auth-footer">By continuing, you agree to use Hikanest responsibly.</p>
   </div>
 
   <!-- ── Start screen ── -->
@@ -64,6 +86,7 @@
     <img class="logo-ring" src="icon.png" alt="Hikanest" />
     <h2>Hikanest Meeting Assistant</h2>
     <p>AI Meeting Assistant - invisible to screen share</p>
+    <p id="start-credits" class="credits-badge start-credits">— credits</p>
     <input id="meeting-name" class="name-input" type="text" placeholder="Meeting name (e.g. Client Call)..." maxlength="80" />
     <button id="setup-btn" class="ctrl-btn setup-open-btn" type="button">Session setup</button>
     <button id="start-btn" class="btn-start">Start Session</button>
@@ -73,6 +96,7 @@
     <div class="setup-header">
       <img class="setup-logo" src="icon.png" alt="Hikanest" />
       <div><h2>Prepare your session</h2><p>Choose your context and response preferences.</p></div>
+      <span id="setup-credits" class="credits-badge">— credits</span>
       <button id="setup-back-btn" class="credit-button" type="button">Back</button>
     </div>
     <div class="setup-body">
@@ -83,16 +107,16 @@
         <button class="mode-choice" type="button" data-mode="call">Regular call</button>
       </div>
 
-      <label class="setup-label" for="job-post-url">Job post URL <span>optional</span></label>
-      <input id="job-post-url" class="name-input" type="url" placeholder="https://company.com/jobs/role" />
+      <label class="setup-label" for="job-post-url">Job description or role context <span>optional</span></label>
+      <textarea id="job-post-url" class="name-input" rows="3" maxlength="4000" placeholder="Paste the role requirements or the most relevant job description text"></textarea>
 
       <div class="setup-section">
         <div class="setup-section-head"><span>Context</span><span id="setup-uploaded-list">No documents added</span></div>
         <div class="context-actions">
           <label class="context-action"><input id="resume-upload" type="file" accept=".pdf,.doc,.docx,.txt,.md" />Add resume</label>
-          <label class="context-action"><input id="setup-doc-upload" type="file" multiple />Add documents</label>
+          <label class="context-action"><input id="setup-doc-upload" type="file" accept=".pdf,.docx,.txt,.md,.json,.csv" multiple />Add documents</label>
         </div>
-        <textarea id="session-guidance" class="name-input" rows="3" placeholder="Extra context, experience highlights, or answer style..."></textarea>
+        <textarea id="session-guidance" class="name-input" rows="4" placeholder="Free prompt, e.g. Review my uploaded resume and JD. Act like me as a senior data engineer. Write answers on screen in a natural human tone."></textarea>
       </div>
 
       <div class="setup-section two-column">
@@ -100,7 +124,7 @@
         <label><span class="setup-label">Language</span><select id="output-language" class="setup-select"><option value="English">English</option><option value="Spanish">Spanish</option><option value="French">French</option></select></label>
       </div>
 
-      <div class="behavior-row"><div><strong>Auto answer</strong><span>Analyze completed responses automatically</span></div><label class="switch"><input id="auto-answer" type="checkbox" checked /><span></span></label></div>
+      <div class="behavior-row"><div><strong>Answer on stop</strong><span>When you stop the mic, analyze the captured transcript immediately</span></div><label class="switch"><input id="auto-answer" type="checkbox" checked /><span></span></label></div>
       <div class="behavior-row"><div><strong>Save transcript</strong><span>Keep this session in your history</span></div><label class="switch"><input id="save-transcript" type="checkbox" checked /><span></span></label></div>
       <button id="setup-start-btn" class="btn-start">Start session</button>
     </div>
@@ -114,7 +138,8 @@
       <img class="hdr-logo" src="icon.png" alt="Hikanest" />
       <span class="hdr-title" id="hdr-title">Meeting</span>
       <span class="hdr-timer" id="hdr-timer">0:00</span>
-      <span class="status-dot" id="status-dot">● Live</span>
+      <span class="status-dot" id="status-dot">● Ready</span>
+      <span id="credits-badge" class="credits-badge" title="Answer credits">— credits</span>
       <div id="meeting-badge" class="meeting-badge" style="display:none"></div>
       <button class="hdr-btn" id="hide-btn" title="Minimise to tray">−</button>
       <button class="hdr-btn danger" id="end-hdr-btn" title="End session">✕</button>
@@ -132,41 +157,31 @@
       </div>
       <button class="ctrl-btn" id="clickthrough-btn" title="Toggle click-through mode">🖱️ Off</button>
       <button class="ctrl-btn" id="export-btn" title="Export session as Markdown">↓ Export</button>
-      <label class="toolbar-group" title="Upload resume/docs">
-        <input id="doc-upload" type="file" multiple style="display:inline-block" />
+      <label class="ctrl-btn" title="Upload resume or documents">
+        <input id="doc-upload" type="file" accept=".pdf,.docx,.txt,.md,.json,.csv" multiple hidden />
+        + Docs
       </label>
       <div id="uploaded-list" style="display:inline-block;margin-left:8px;color:#94a3b8;font-size:12px"></div>
     </div>
 
-    <!-- Split view -->
-    <div class="split">
+    <div class="session-stage">
+      <section class="live-stage" aria-live="polite">
+        <div class="live-stage-hdr">
+          <span id="live-tx-label" class="live-badge">Ready</span>
+          <span id="rec-indicator" class="rec-pulse" hidden>● Listening</span>
+        </div>
+        <div id="live-tx" class="tx-live">
+          <textarea id="live-tx-text" aria-label="Live transcript" spellcheck="true" placeholder="Press Listen. Speech appears here live."></textarea>
+        </div>
+      </section>
 
-      <!-- Live transcription area -->
-      <div class="live-transcription-pane">
-        <div class="pane-hdr">
-          <span class="pane-lbl">Live Transcription</span>
-        </div>
-        <div id="live-tx" class="tx-live" style="display:none">
-          <span id="live-tx-label" class="tx-live-lbl">● LIVE</span>
-          <textarea id="live-tx-text" aria-label="Editable transcription" spellcheck="true"></textarea>
-        </div>
+      <div class="tx-pane" hidden>
+        <div class="scroll" id="tx-scroll"></div>
       </div>
 
-      <!-- Transcript pane -->
-      <div class="tx-pane">
+      <section class="ai-pane">
         <div class="pane-hdr">
-          <span class="pane-lbl">Transcript</span>
-          <span id="rec-indicator" style="display:none;font-size:9px;color:#ef4444">● REC</span>
-        </div>
-        <div class="scroll" id="tx-scroll">
-          <div class="empty-hint"><span>🎤</span>Tap Record to start</div>
-        </div>
-      </div>
-
-      <!-- AI Answers pane -->
-      <div class="ai-pane">
-        <div class="pane-hdr">
-          <span class="pane-lbl">AI Answers</span>
+          <span class="pane-lbl">Answer</span>
           <select id="lang-filter" class="lang-select" title="Filter by language">
             <option value="all">All</option>
             <option value="sql">SQL</option>
@@ -177,19 +192,23 @@
           </select>
         </div>
         <div class="scroll" id="ai-scroll">
-          <div class="empty-hint"><span>✦</span>AI answers appear here</div>
+          <div class="empty-hint"><span>✦</span>Press Listen, then Stop — the answer appears here</div>
         </div>
         <div id="history-strip" style="display:none" class="history-strip">
           <div class="history-lbl">Previous</div>
           <div id="history-list"></div>
         </div>
-      </div>
-
+      </section>
     </div>
 
-    <!-- Bottom bar: mic source + ask + end -->
     <div class="bottom">
-      <button class="mic-btn" id="mic-btn" title="Record">🎤</button>
+      <div class="listen-cluster">
+        <button class="mic-btn" id="mic-btn" type="button" title="Start listening">🎤</button>
+        <div class="listen-copy">
+          <strong id="mic-label">Listen</strong>
+          <span id="mic-hint">Capture audio</span>
+        </div>
+      </div>
       <select id="mic-source" class="src-select" title="Microphone source"></select>
       <div class="audio-meter" id="audio-meter" title="Audio input levels">
         <div class="meter-row">
@@ -201,7 +220,7 @@
           <div class="meter-track"><div id="meter-client-fill" class="meter-fill client"></div></div>
         </div>
       </div>
-      <textarea class="ask-input" id="ask-input" rows="1" placeholder="Ask Hikanest anything…" spellcheck="true"></textarea>
+      <textarea class="ask-input" id="ask-input" rows="1" placeholder="Or type a follow-up…" spellcheck="true"></textarea>
       <button class="btn-ask" id="ask-btn">Ask</button>
       <button class="btn-end" id="end-btn">End</button>
     </div>

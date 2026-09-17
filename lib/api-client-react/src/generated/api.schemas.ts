@@ -57,8 +57,38 @@ export interface Stats {
   avgInsightsPerSession: number;
 }
 
+export type AnalyzeInputMode = typeof AnalyzeInputMode[keyof typeof AnalyzeInputMode];
+
+
+export const AnalyzeInputMode = {
+  interview: 'interview',
+  meeting: 'meeting',
+} as const;
+
+export type AnalyzeInputUploadedDocsItem = {
+  id: string;
+  name: string;
+};
+
+export type ConversationTurnRole = typeof ConversationTurnRole[keyof typeof ConversationTurnRole];
+
+
+export const ConversationTurnRole = {
+  user: 'user',
+  assistant: 'assistant',
+} as const;
+
+export interface ConversationTurn {
+  role: ConversationTurnRole;
+  /** @maxLength 4000 */
+  content: string;
+}
+
 export interface AnalyzeInput {
-  /** Recent meeting transcript text */
+  /**
+     * Recent meeting transcript text
+     * @maxLength 12000
+     */
   transcript: string;
   /**
      * Optional base64-encoded PNG screenshot of the meeting screen
@@ -67,6 +97,16 @@ export interface AnalyzeInput {
   screenshotBase64?: string | null;
   /** @nullable */
   sessionId?: number | null;
+  mode?: AnalyzeInputMode;
+  /** Requested model; the API enforces its server-side allowlist */
+  model?: string;
+  /** @maxItems 12 */
+  history?: ConversationTurn[];
+  /**
+     * Optional uploaded documents to use as grounded context
+     * @maxItems 3
+     */
+  uploadedDocs?: AnalyzeInputUploadedDocsItem[];
 }
 
 export interface AISection {
@@ -91,7 +131,9 @@ export interface AnalyzeResult {
   /** The question or topic detected in the transcript that was answered */
   question: string;
   answer: string;
-  domain: string;
+  questionType?: string;
+  /** Detected response domain */
+  domain?: string;
   suggestions: string[];
   confidence: AnalyzeResultConfidence;
   sections?: AISection[];

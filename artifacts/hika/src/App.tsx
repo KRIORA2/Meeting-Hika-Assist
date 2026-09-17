@@ -2,22 +2,23 @@ import { Switch, Route, Router as WouterRouter, useLocation } from "wouter";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { useEffect } from "react";
+import { lazy, Suspense, useEffect, useState } from "react";
 import { setBaseUrl, setAuthTokenGetter } from "@workspace/api-client-react";
-import { getStoredSessionToken, isAuthenticated, syncAuthSession } from "@/lib/auth";
+import { getAccessToken, isAuthenticated, subscribeAuth } from "@/lib/auth";
 import Shell from "@/components/layout/Shell";
-import Landing from "@/pages/Landing";
-import Login from "@/pages/Login";
-import Install from "@/pages/Install";
-import Dashboard from "@/pages/Dashboard";
-import MeetingAssistant from "@/pages/MeetingAssistant";
-import History from "@/pages/History";
-import SessionDetail from "@/pages/SessionDetail";
-import Documents from "@/pages/Documents";
-import Settings from "@/pages/Settings";
-import DesktopConnect from "@/pages/DesktopConnect";
-import StealthOverlay from "@/pages/StealthOverlay";
-import NotFound from "@/pages/not-found";
+const Landing = lazy(() => import("@/pages/Landing"));
+const Login = lazy(() => import("@/pages/Login"));
+const Install = lazy(() => import("@/pages/Install"));
+const Dashboard = lazy(() => import("@/pages/Dashboard"));
+const MeetingAssistant = lazy(() => import("@/pages/MeetingAssistant"));
+const History = lazy(() => import("@/pages/History"));
+const SessionDetail = lazy(() => import("@/pages/SessionDetail"));
+const Documents = lazy(() => import("@/pages/Documents"));
+const Settings = lazy(() => import("@/pages/Settings"));
+const Pricing = lazy(() => import("@/pages/Pricing"));
+const DesktopConnect = lazy(() => import("@/pages/DesktopConnect"));
+const StealthOverlay = lazy(() => import("@/pages/StealthOverlay"));
+const NotFound = lazy(() => import("@/pages/not-found"));
 
 const queryClient = new QueryClient();
 
@@ -51,6 +52,7 @@ function ProtectedShell() {
         <Route path="/history/:id" component={SessionDetail} />
         <Route path="/documents" component={Documents} />
         <Route path="/settings" component={Settings} />
+        <Route path="/pricing" component={Pricing} />
         <Route component={NotFound} />
       </Switch>
     </Shell>
@@ -69,6 +71,7 @@ function Router() {
     <Switch>
       {/* Public landing page — no shell */}
       <Route path="/login" component={Login} />
+      <Route path="/pricing" component={Pricing} />
       <Route path="/desktop-connect" component={DesktopConnect} />
       <Route path="/install" component={ProtectedInstall} />
       <Route path="/" component={HomeRoute} />
@@ -83,20 +86,23 @@ function Router() {
 }
 
 export default function App() {
+  const [authReady, setAuthReady] = useState(false);
+
   useEffect(() => {
     document.documentElement.classList.add("dark");
-
     const apiUrl = import.meta.env.VITE_API_URL || "http://localhost:5000";
     setBaseUrl(apiUrl);
-    setAuthTokenGetter(() => getStoredSessionToken());
-    void syncAuthSession();
+    setAuthTokenGetter(() => getAccessToken());
+    return subscribeAuth(() => setAuthReady(true));
   }, []);
 
   return (
     <QueryClientProvider client={queryClient}>
       <TooltipProvider>
         <WouterRouter base={import.meta.env.BASE_URL.replace(/\/$/, "")}>
-          <Router />
+          <Suspense fallback={<div className="min-h-screen bg-[#07070f]" aria-label="Loading Hikanest" />}>
+            {authReady ? <Router /> : <div className="min-h-screen bg-[#07070f]" aria-label="Loading Hikanest" />}
+          </Suspense>
         </WouterRouter>
         <Toaster />
       </TooltipProvider>

@@ -1,8 +1,8 @@
 import { useEffect, useState } from "react";
 import { motion } from "framer-motion";
-import { Mic, Monitor, Volume2, Sliders, Shield, Keyboard, Bell } from "lucide-react";
-import { cn } from "@/lib/utils";
-import { getStoredSessionToken } from "@/lib/auth";
+import { Monitor, Sliders, CreditCard } from "lucide-react";
+import { getAccessToken } from "@/lib/auth";
+import { useLocation } from "wouter";
 
 function Section({ title, icon: Icon, children }: { title: string; icon: React.ElementType; children: React.ReactNode }) {
   return (
@@ -28,25 +28,6 @@ function Row({ label, description, children }: { label: string; description?: st
   );
 }
 
-function Toggle({ value, onChange }: { value: boolean; onChange: (v: boolean) => void }) {
-  return (
-    <button
-      onClick={() => onChange(!value)}
-      className={cn(
-        "relative w-9 h-5 rounded-full transition-colors",
-        value ? "bg-primary" : "bg-muted"
-      )}
-    >
-      <div
-        className={cn(
-          "absolute top-0.5 w-4 h-4 rounded-full bg-white shadow transition-all",
-          value ? "left-4.5" : "left-0.5"
-        )}
-      />
-    </button>
-  );
-}
-
 function Select({ value, options, onChange }: { value: string; options: { label: string; value: string }[]; onChange: (v: string) => void }) {
   return (
     <select
@@ -62,17 +43,11 @@ function Select({ value, options, onChange }: { value: string; options: { label:
 }
 
 export default function Settings() {
-  const [autoAnalyze, setAutoAnalyze] = useState(true);
-  const [stealthMode, setStealthMode] = useState(true);
-  const [notifications, setNotifications] = useState(false);
-  const [audioDevice, setAudioDevice] = useState("default");
-  const [language, setLanguage] = useState("en");
+  const [, navigate] = useLocation();
   const [model, setModel] = useState(() => {
     if (typeof window === "undefined") return "gpt-4.1";
     return window.localStorage.getItem("hika-ai-model") || "gpt-4.1";
   });
-  const [overlayOpacity, setOverlayOpacity] = useState(85);
-  const [chunkSize, setChunkSize] = useState(8);
   const [desktopStatus, setDesktopStatus] = useState("");
 
   useEffect(() => {
@@ -82,7 +57,7 @@ export default function Settings() {
   }, [model]);
 
   async function openDesktopApp() {
-    const token = getStoredSessionToken();
+    const token = await getAccessToken();
     if (!token) {
       setDesktopStatus("Please sign in again before opening the desktop app.");
       return;
@@ -135,71 +110,24 @@ export default function Settings() {
         </div>
 
         <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} className="space-y-4">
-          <Section title="Microphone & Audio" icon={Mic}>
-            <Row
-              label="Input Device"
-              description="Select which microphone Hikanest listens to"
-            >
-              <Select
-                value={audioDevice}
-                options={[
-                  { label: "System Default", value: "default" },
-                  { label: "Built-in Microphone", value: "built-in" },
-                ]}
-                onChange={setAudioDevice}
-              />
-            </Row>
-            <Row
-              label="Language"
-              description="Language spoken in your meetings"
-            >
-              <Select
-                value={language}
-                options={[
-                  { label: "English (US)", value: "en" },
-                  { label: "English (UK)", value: "en-gb" },
-                  { label: "Spanish", value: "es" },
-                  { label: "French", value: "fr" },
-                  { label: "German", value: "de" },
-                ]}
-                onChange={setLanguage}
-              />
-            </Row>
-            <Row
-              label="Recording chunk size"
-              description={`Audio is sent every ${chunkSize} seconds for transcription`}
-            >
-              <div className="flex items-center gap-2">
-                <input
-                  type="range"
-                  min={4}
-                  max={15}
-                  value={chunkSize}
-                  onChange={(e) => setChunkSize(Number(e.target.value))}
-                  className="w-24"
-                />
-                <span className="text-sm text-muted-foreground w-8">{chunkSize}s</span>
-              </div>
-            </Row>
-          </Section>
-
           <Section title="AI Intelligence" icon={Sliders}>
-            <Row label="AI Model" description="Model used for analysis">
+            <Row label="AI Model" description="Model used for on-screen answers">
               <Select
                 value={model}
                 options={[
                   { label: "GPT-4.1 (most accurate)", value: "gpt-4.1" },
                   { label: "GPT-4o (balanced)", value: "gpt-4o" },
-                  { label: "GPT-4o mini (fast)", value: "gpt-4o-mini" },
                 ]}
                 onChange={setModel}
               />
             </Row>
-            <Row
-              label="Auto-analyze questions"
-              description="Automatically detect and answer questions without pressing a button"
-            >
-              <Toggle value={autoAnalyze} onChange={setAutoAnalyze} />
+          </Section>
+
+          <Section title="Plan & credits" icon={CreditCard}>
+            <Row label="Billing" description="Upgrade, see credits, or manage your plan on the website">
+              <button onClick={() => navigate("/pricing")} className="rounded-lg bg-primary px-3 py-1.5 text-sm font-semibold text-primary-foreground">
+                Open pricing
+              </button>
             </Row>
           </Section>
 
@@ -210,49 +138,6 @@ export default function Settings() {
               </button>
             </Row>
             {desktopStatus && <p className="px-5 pb-3 text-xs text-muted-foreground">{desktopStatus}</p>}
-            <Row label="Private Stealth Mode" description="Use Document Picture-in-Picture so the overlay is invisible to screen share">
-              <Toggle value={stealthMode} onChange={setStealthMode} />
-            </Row>
-            <Row
-              label="Overlay opacity"
-              description={`${overlayOpacity}% — higher is more visible`}
-            >
-              <div className="flex items-center gap-2">
-                <input
-                  type="range"
-                  min={40}
-                  max={100}
-                  value={overlayOpacity}
-                  onChange={(e) => setOverlayOpacity(Number(e.target.value))}
-                  className="w-24"
-                />
-                <span className="text-sm text-muted-foreground w-8">{overlayOpacity}%</span>
-              </div>
-            </Row>
-          </Section>
-
-          <Section title="Privacy & Security" icon={Shield}>
-            <Row
-              label="Notifications"
-              description="Show desktop notifications when a question is detected"
-            >
-              <Toggle value={notifications} onChange={setNotifications} />
-            </Row>
-            <Row label="Data storage" description="Where session data is stored">
-              <span className="text-xs text-muted-foreground bg-muted px-2.5 py-1 rounded">Local DB only</span>
-            </Row>
-          </Section>
-
-          <Section title="Keyboard Shortcuts" icon={Keyboard}>
-            <Row label="Toggle mic" description="Start or stop recording">
-              <kbd className="text-xs bg-muted border border-border rounded px-2 py-1 font-mono">⌘ + M</kbd>
-            </Row>
-            <Row label="Ask Hikanest" description="Manually trigger AI analysis">
-              <kbd className="text-xs bg-muted border border-border rounded px-2 py-1 font-mono">⌘ + ↵</kbd>
-            </Row>
-            <Row label="Toggle stealth overlay" description="Show or hide the floating overlay">
-              <kbd className="text-xs bg-muted border border-border rounded px-2 py-1 font-mono">⌘ + ⇧ + H</kbd>
-            </Row>
           </Section>
 
           {hikaElectron && (

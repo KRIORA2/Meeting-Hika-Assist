@@ -157,20 +157,38 @@ export const GetStatsResponse = zod.object({
 /**
  * @summary Analyze meeting context (transcript + optional screenshot) and return AI answer
  */
+export const analyzeContextBodyTranscriptMax = 12000;
+
+export const analyzeContextBodyModeDefault = `interview`;
+export const analyzeContextBodyHistoryItemContentMax = 4000;
+
+export const analyzeContextBodyHistoryMax = 12;
+
+export const analyzeContextBodyUploadedDocsMax = 3;
+
+
+
 export const AnalyzeContextBody = zod.object({
-  "transcript": zod.string().describe('Recent meeting transcript text'),
+  "transcript": zod.string().max(analyzeContextBodyTranscriptMax).describe('Recent meeting transcript text'),
   "screenshotBase64": zod.string().nullish().describe('Optional base64-encoded PNG screenshot of the meeting screen'),
   "sessionId": zod.number().nullish(),
+  "mode": zod.enum(['interview', 'meeting']).default(analyzeContextBodyModeDefault),
+  "model": zod.string().optional().describe('Requested model; the API enforces its server-side allowlist'),
+  "history": zod.array(zod.object({
+  "role": zod.enum(['user', 'assistant']),
+  "content": zod.string().max(analyzeContextBodyHistoryItemContentMax)
+})).max(analyzeContextBodyHistoryMax).optional(),
   "uploadedDocs": zod.array(zod.object({
-    "id": zod.string(),
-    "name": zod.string()
-  })).optional().describe('Optional uploaded document descriptors (id+name) to provide user documents for context')
+  "id": zod.string(),
+  "name": zod.string()
+})).max(analyzeContextBodyUploadedDocsMax).optional().describe('Optional uploaded documents to use as grounded context')
 })
 
 export const AnalyzeContextResponse = zod.object({
   "question": zod.string().describe('The question or topic detected in the transcript that was answered'),
   "answer": zod.string(),
-  "domain": zod.string().describe('The detected domain for the response, such as IT, Sales, Marketing, Finance, HR, Operations, Cloud, Data, SAP, AWS, Azure, Analytics, Product, or General Business'),
+  "questionType": zod.string().optional(),
+  "domain": zod.string().optional().describe('Detected response domain'),
   "suggestions": zod.array(zod.string()),
   "confidence": zod.enum(['high', 'medium', 'low']),
   "sections": zod.array(zod.object({

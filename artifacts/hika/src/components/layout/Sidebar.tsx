@@ -1,19 +1,21 @@
 import { Link, useLocation } from "wouter";
 import {
+  Home,
   LayoutDashboard,
   Plus,
   History,
   FileText,
-  Brain,
   Bot,
   Settings,
   User,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { getAuthSession } from "@/lib/auth";
 
 const sections = [
   {
     items: [
+      { name: "Home", href: "/", icon: Home },
       { name: "Dashboard", href: "/dashboard", icon: LayoutDashboard },
       { name: "New Session", href: "/session", icon: Plus, accent: true },
     ],
@@ -23,13 +25,12 @@ const sections = [
     items: [
       { name: "History", href: "/history", icon: History },
       { name: "Documents", href: "/documents", icon: FileText },
-      { name: "Knowledge Base", href: "/documents", icon: Brain },
     ],
   },
   {
-    label: "AI",
+    label: "PLAN",
     items: [
-      { name: "AI Models", href: "/settings", icon: Bot, badge: "soon" },
+      { name: "Pricing", href: "/pricing", icon: Bot },
     ],
   },
 ];
@@ -84,8 +85,11 @@ function NavItem({ name, href, icon: Icon, active, accent, badge }: NavItemProps
 export default function Sidebar() {
   const [location] = useLocation();
 
-  const isActive = (href: string) =>
-    href === "/dashboard" ? location === "/dashboard" : location.startsWith(href);
+  const isActive = (href: string) => {
+    if (href === "/") return location === "/";
+    if (href === "/dashboard") return location === "/dashboard";
+    return location.startsWith(href);
+  };
 
   return (
     <div className="relative w-[248px] flex-shrink-0 flex flex-col h-[100dvh] overflow-hidden border-r border-white/10 bg-[rgba(7,7,15,0.68)] backdrop-blur-2xl">
@@ -133,8 +137,8 @@ export default function Sidebar() {
             <User size={12} className="text-white" />
           </div>
           <div className="flex-1 min-w-0">
-            <p className="text-xs font-medium truncate text-white">Account</p>
-            <p className="text-[10px] text-white/45 truncate">Free plan</p>
+            <p className="text-xs font-medium truncate text-white">{getAuthSession()?.email || "Account"}</p>
+            <p className="text-[10px] text-white/45 truncate">Firebase workspace</p>
           </div>
         </div>
       </div>

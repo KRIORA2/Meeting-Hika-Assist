@@ -85,7 +85,7 @@ export default function SessionDetail() {
 		return (
 			<div className="p-6 flex flex-col items-center justify-center min-h-full text-muted-foreground">
 				<p>Session not found.</p>
-				<Link href="/sessions">
+				<Link href="/history">
 					<button className="mt-3 text-sm text-primary hover:underline">Back to sessions</button>
 				</Link>
 			</div>
@@ -97,7 +97,7 @@ export default function SessionDetail() {
 	return (
 		<div className="h-full flex flex-col p-6 max-w-3xl mx-auto">
 			{/* Back */}
-			<Link href="/sessions">
+			<Link href="/history">
 				<button className="flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors mb-5 group">
 					<ChevronLeft size={16} className="group-hover:-translate-x-0.5 transition-transform" />
 					Sessions

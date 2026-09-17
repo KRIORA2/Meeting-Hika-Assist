@@ -8,8 +8,12 @@
 
 export * from './aISection';
 export * from './analyzeInput';
+export * from './analyzeInputMode';
+export * from './analyzeInputUploadedDocsItem';
 export * from './analyzeResult';
 export * from './analyzeResultConfidence';
+export * from './conversationTurn';
+export * from './conversationTurnRole';
 export * from './healthStatus';
 export * from './insight';
 export * from './insightInput';

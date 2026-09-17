@@ -9,6 +9,7 @@ import {
   useTranscribeAudio,
   useCreateInsight,
   getGetStatsQueryKey,
+  getListSessionInsightsQueryKey,
   getListSessionsQueryKey,
 } from "@workspace/api-client-react";
 import {
@@ -18,7 +19,7 @@ import {
   Monitor, Video, Wifi, Clock, ChevronRight, MicOff, Download,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { getStoredSessionToken } from "@/lib/auth";
+import { getAccessToken } from "@/lib/auth";
 import InsightAnswer from "@/components/InsightAnswer";
 import { acceptsRealtimeResponseEvent, appendRealtimeDelta } from "@/services/realtimeProtocol";
 
@@ -417,9 +418,35 @@ function PiPContent({
             {micActive ? formatSecs(recordingSeconds) : isTranscribing ? "···" : "tap"}
           </span>
         </div>
-        <div style={{ ...S.input, display: "flex", alignItems: "center", opacity: 0.9 }}>
-          Live Assist Mode active — Hikanest prepares answers automatically.
-        </div>
+        <textarea
+          value={manualQ}
+          onChange={(event) => setManualQ(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
+              event.preventDefault();
+              const question = manualQ.trim();
+              if (question && !isAnalyzing) {
+                setManualQ("");
+                runAnalysis({ question });
+              }
+            }
+          }}
+          placeholder="Ask Hikanest anything…"
+          rows={1}
+          style={{ ...S.input, resize: "none" }}
+        />
+        <button
+          style={askBtn(!manualQ.trim() || isAnalyzing)}
+          disabled={!manualQ.trim() || isAnalyzing}
+          onClick={() => {
+            const question = manualQ.trim();
+            if (!question) return;
+            setManualQ("");
+            runAnalysis({ question });
+          }}
+        >
+          Ask
+        </button>
         <button style={S.endBtn} onClick={stopSession}>End</button>
       </div>
     </div>
@@ -683,9 +710,17 @@ function PiPContent({
           <div className="flex-1 overflow-y-auto p-3 space-y-3">
             <div className="flex flex-col gap-2">
               <label className="text-[11px] text-slate-400">Upload resume / docs (optional)</label>
-              <input type="file" multiple onChange={async (e) => {
+              <input type="file" accept=".pdf,.docx,.txt,.md,.json,.csv" multiple onChange={async (e) => {
                 const files = e.target.files;
                 if (!files || files.length === 0) return;
+                if (
+                  files.length > 3 ||
+                  Array.from(files).some((file) => file.size > 10 * 1024 * 1024) ||
+                  Array.from(files).reduce((total, file) => total + file.size, 0) > 15 * 1024 * 1024
+                ) {
+                  console.error("Upload supports up to 3 files of 10 MB each.");
+                  return;
+                }
                 const toUpload: Array<{ name: string; contentBase64: string }> = [];
                 for (let i = 0; i < files.length; i++) {
                   const f = files[i];
@@ -701,7 +736,15 @@ function PiPContent({
                 }
                 try {
                   const apiUrl = (import.meta.env.VITE_API_URL || '').replace(/\/$/, '');
-                  const res = await fetch(`${apiUrl}/api/documents`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ files: toUpload }) });
+                  const token = await getAccessToken();
+                  const res = await fetch(`${apiUrl}/api/documents`, {
+                    method: 'POST',
+                    headers: {
+                      'Content-Type': 'application/json',
+                      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+                    },
+                    body: JSON.stringify({ files: toUpload }),
+                  });
                   if (!res.ok) throw new Error('upload failed');
                   const j = await res.json();
                   const added = (j.files || []).map((f: any) => ({ id: f.id, name: f.name }));
@@ -740,6 +783,38 @@ function PiPContent({
               )}
 
             </div>
+            <div className="flex items-end gap-2 border-t border-white/[0.07] pt-3">
+              <textarea
+                value={manualQ}
+                onChange={(event) => setManualQ(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
+                    event.preventDefault();
+                    const question = manualQ.trim();
+                    if (question && !isAnalyzing) {
+                      setManualQ("");
+                      runAnalysis({ question });
+                    }
+                  }
+                }}
+                rows={2}
+                placeholder="Ask a free-form question…"
+                className="min-h-10 flex-1 resize-none rounded-lg border border-white/10 bg-white/[0.04] px-3 py-2 text-xs text-slate-100 outline-none focus:border-primary/50"
+              />
+              <button
+                type="button"
+                disabled={!manualQ.trim() || isAnalyzing}
+                onClick={() => {
+                  const question = manualQ.trim();
+                  if (!question) return;
+                  setManualQ("");
+                  runAnalysis({ question });
+                }}
+                className="rounded-lg bg-primary px-3 py-2 text-xs font-semibold text-primary-foreground disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                Ask
+              </button>
+            </div>
           </div>
         </div>
       </div>
@@ -777,6 +852,7 @@ function PiPContent({
   const realtimeStopRequestedRef = useRef(false);
   const realtimeResponseRequestedRef = useRef(false);
   const cancelledResponseIdsRef = useRef<Set<string>>(new Set());
+  const persistedResponseIdsRef = useRef<Set<string>>(new Set());
   const realtimeGenerationRef = useRef(0);
   const realtimeConnectingRef = useRef(false);
   const realtimeReconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -878,12 +954,8 @@ function PiPContent({
     } catch { return null; }
   }, []);
 
-  const addInsight = useCallback((insight: Insight) => {
-    // Keep ONLY the latest AI response
-    setInsights([insight]);
-
+  const persistInsight = useCallback((insight: Insight) => {
     const sid = sessionIdRef.current;
-
     if (sid) {
       createInsight.mutate({
         data: {
@@ -892,12 +964,13 @@ function PiPContent({
           answer: insight.answer,
           confidence: insight.confidence,
         },
+      }, {
+        onSuccess: () => {
+          queryClient.invalidateQueries({ queryKey: getGetStatsQueryKey() });
+          queryClient.invalidateQueries({ queryKey: getListSessionInsightsQueryKey(sid) });
+        },
       });
     }
-
-    queryClient.invalidateQueries({
-      queryKey: getGetStatsQueryKey(),
-    });
   }, [createInsight, queryClient]);
 
   const runAnalysis = useCallback(async (opts: { question?: string; transcript?: string; utterance?: string } = {}) => {
@@ -937,8 +1010,12 @@ function PiPContent({
     // Build context so the latest prompt is answered directly and the most recent transcript is available for accuracy.
     const profileContext = [
       sessionGuidanceRef.current ? `Session guidance: ${sessionGuidanceRef.current}` : "",
-      "Candidate profile: Respond at a strong 5-6 years professional experience level.",
-      "Prefer production-ready, practical, interview-grade responses.",
+      sessionMode === "interview"
+        ? "Candidate profile: Respond at a strong 5-6 years professional experience level."
+        : "Meeting mode: Respond as a concise professional copilot; do not pretend to be the user.",
+      sessionMode === "interview"
+        ? "Prefer production-ready, practical, interview-grade responses."
+        : "Prefer direct recommendations, practical reasoning, and clear next actions.",
     ].filter(Boolean).join("\n");
 
     const ctx = utterance
@@ -960,8 +1037,9 @@ function PiPContent({
           transcript: ctx,
           screenshotBase64: screenshot ?? undefined,
           sessionId: sessionIdRef.current ?? undefined,
-          uploadedDocs: uploadedDocsRef.current ?? undefined,
+          uploadedDocs: uploadedDocsRef.current.slice(0, 3),
           model: preferredModel,
+          mode: sessionMode,
           history: historyForRequest,
         },
       } as any);
@@ -984,6 +1062,7 @@ function PiPContent({
         sections: (result.sections as AISection[] | undefined) ?? [],
         timestamp: new Date(),
       };
+      persistInsight(insight);
 
 
       const words = answer.split(/(\s+)/).filter((w: string) => w.length > 0);
@@ -1004,11 +1083,14 @@ function PiPContent({
           }
         }, 20);
       }
+    } catch (error) {
+      if (question) setManualQ(question);
+      setMicError(error instanceof Error ? error.message : "Hikanest could not generate an answer. Please try again.");
     } finally {
       isAnalyzingRef.current = false;
       setIsAnalyzing(false);
     }
-  }, [captureScreenshot, analyzeContext]);
+  }, [captureScreenshot, analyzeContext, persistInsight, sessionMode]);
 
   const recordRealtimeMetric = useCallback((name: string) => {
     const now = performance.now();
@@ -1077,7 +1159,7 @@ function PiPContent({
     realtimeTranscriptRef.current = "";
 
     const apiUrl = (import.meta.env.VITE_API_URL || "http://localhost:5000").replace(/\/$/, "");
-    const token = getStoredSessionToken();
+    const token = await getAccessToken();
 
     const isCurrent = () => realtimeGenerationRef.current === generation && realtimePeerRef.current === peer;
     const appendTranscript = (text: string) => {
@@ -1100,8 +1182,23 @@ function PiPContent({
     const showAnswer = (answer: string, done = false) => {
       const text = answer.trim();
       if (!text) return;
-      setInsights([{ id: `realtime-${generation}`, question: realtimeTranscriptRef.current || "Live question", answer: text,
-        domain: "Live Assist", suggestions: [], confidence: done ? "high" : "medium", sections: [], timestamp: new Date() }]);
+      const insight: Insight = {
+        id: `realtime-${generation}`,
+        question: realtimeTranscriptRef.current || "Live question",
+        answer: text,
+        domain: "Live Assist",
+        suggestions: [],
+        confidence: done ? "high" : "medium",
+        sections: [],
+        timestamp: new Date(),
+      };
+      setInsights([insight]);
+      const responseKey = realtimeResponseIdRef.current;
+      if (done && responseKey && !persistedResponseIdsRef.current.has(responseKey)) {
+        if (persistedResponseIdsRef.current.size >= 64) persistedResponseIdsRef.current.clear();
+        persistedResponseIdsRef.current.add(responseKey);
+        persistInsight(insight);
+      }
       setAnswerReady(done);
     };
 
@@ -1216,7 +1313,7 @@ function PiPContent({
         body: JSON.stringify({
           sessionGuidance: sessionGuidanceRef.current,
           mode: sessionMode,
-          uploadedDocs: uploadedDocsRef.current,
+          uploadedDocs: uploadedDocsRef.current.slice(0, 3),
         }),
       });
       if (!authorization.ok) throw new Error(`Realtime authorization failed (${authorization.status})`);
@@ -1245,7 +1342,7 @@ function PiPContent({
     } finally {
       realtimeConnectingRef.current = false;
     }
-  }, [recordRealtimeMetric, sessionMode, stopRealtimeStreaming]);
+  }, [persistInsight, recordRealtimeMetric, sessionMode, stopRealtimeStreaming]);
 
   useEffect(() => {
     const recover = () => {
@@ -1605,23 +1702,28 @@ function PiPContent({
       ? "Live interview mode: prioritize resume-grounded candidate answers, STAR where applicable, and concise confident delivery."
       : "Live meeting mode: prioritize action-ready responses, decisions, and follow-up clarity.";
 
-    const session = await createSession.mutateAsync({ data: { title: normalizedTitle, platform } });
-    sessionIdRef.current = session.id;
-    sessionGuidanceRef.current = [sessionGuidance.trim(), modeGuidance].filter(Boolean).join("\n");
-    forceHttpFallbackRef.current = false;
-    cancelledResponseIdsRef.current.clear();
-    setShowStart(false);
-    setChunks([]); setInsights([]);
-    transcriptRef.current = "";
-    setSessionStart(new Date());
-    setElapsed("0:00:00");
-    setSessionActive(true);
-    queryClient.invalidateQueries({ queryKey: getListSessionsQueryKey() });
+    try {
+      const session = await createSession.mutateAsync({ data: { title: normalizedTitle, platform } });
+      sessionIdRef.current = session.id;
+      sessionGuidanceRef.current = [sessionGuidance.trim(), modeGuidance].filter(Boolean).join("\n");
+      forceHttpFallbackRef.current = false;
+      cancelledResponseIdsRef.current.clear();
+      persistedResponseIdsRef.current.clear();
+      setShowStart(false);
+      setChunks([]); setInsights([]);
+      transcriptRef.current = "";
+      setSessionStart(new Date());
+      setElapsed("0:00:00");
+      setSessionActive(true);
+      queryClient.invalidateQueries({ queryKey: getListSessionsQueryKey() });
 
-    // Enter live assist mode immediately after session start.
-    startMicRecording().catch(() => {
-      setMicError("Could not start microphone automatically. Tap the mic button to start live capture.");
-    });
+      // Enter live assist mode immediately after session start.
+      startMicRecording().catch(() => {
+        setMicError("Could not start microphone automatically. Tap the mic button to start live capture.");
+      });
+    } catch (error) {
+      setMicError(error instanceof Error ? error.message : "Could not start the session. Please try again.");
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionTitle, platform, sessionGuidance, sessionMode, createSession, queryClient, startMicRecording]);
 
@@ -1635,6 +1737,7 @@ function PiPContent({
     const sid = sessionIdRef.current;
     if (sid) updateSession.mutate({ id: sid, data: { status: "ended" } }, {
       onSuccess: () => queryClient.invalidateQueries({ queryKey: getListSessionsQueryKey() }),
+      onError: () => setMicError("Session closed locally, but history could not be updated."),
     });
     setSessionActive(false); sessionIdRef.current = null; setSessionStart(null);
   }, [releaseMicStream, updateSession, queryClient, pipWin]);

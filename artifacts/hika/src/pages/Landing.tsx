@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { useLocation } from "wouter";
-import { getAuthSession, signOut } from "@/lib/auth";
+import { signOut, subscribeAuth } from "@/lib/auth";
 import {
   Zap, Mic, Brain, EyeOff, History, Download, ChevronRight,
   CheckCircle, Play, Monitor, Layers, ArrowRight, Star,
@@ -22,8 +22,9 @@ export default function Landing() {
   const [activeStep, setActiveStep] = useState(0);
 
   useEffect(() => {
-    const session = getAuthSession();
-    setSessionEmail(session?.email || "");
+    return subscribeAuth((session) => {
+      setSessionEmail(session?.email || "");
+    });
   }, []);
 
   useEffect(() => {
@@ -75,7 +76,7 @@ export default function Landing() {
     { icon: EyeOff, title: "Transparent Overlay", desc: "Floating overlay mode — invisible to screen share, always on top while you meet.", color: "#a78bfa" },
     { icon: History, title: "Session History", desc: "Every meeting saved with full transcript and AI insight timeline for future reference.", color: "#7c3aed" },
     { icon: FileText, title: "Ask Anything", desc: "Type a custom question anytime — Hikanest uses the full conversation context to answer.", color: "#6366f1" },
-    { icon: Shield, title: "Privacy First", desc: "Audio processed in real time, never stored. Your conversations stay private.", color: "#8b5cf6" },
+    { icon: Shield, title: "Privacy First", desc: "Audio is transcribed for the answer and not kept as a recording. Saved session notes stay in your account.", color: "#8b5cf6" },
   ];
 
   const PLATFORMS = [
@@ -160,6 +161,7 @@ export default function Landing() {
         </div>
         <div className="hidden md:flex items-center gap-8 text-sm text-white/50">
           {isSignedIn && <button onClick={() => navigate("/install")} className="hover:text-white transition-colors">Desktop App</button>}
+          <button onClick={() => navigate("/pricing")} className="hover:text-white transition-colors">Pricing</button>
           <a href="#features" className="hover:text-white transition-colors">Features</a>
           <a href="#how-it-works" className="hover:text-white transition-colors">How it works</a>
           <a href="#docs" className="hover:text-white transition-colors">Docs</a>
@@ -168,10 +170,11 @@ export default function Landing() {
           {sessionEmail ? (
             <>
               <button
-                className="hidden sm:block text-sm px-4 py-2 rounded-xl border border-white/15 bg-white/[0.05] text-white/75"
+                onClick={() => navigate("/dashboard")}
+                className="hidden sm:block text-sm px-4 py-2 rounded-xl border border-white/15 bg-white/[0.05] text-white/75 hover:text-white hover:bg-white/[0.09] transition-all"
                 title={sessionEmail}
               >
-                {sessionEmail}
+                Dashboard
               </button>
               <button
                 onClick={() => {

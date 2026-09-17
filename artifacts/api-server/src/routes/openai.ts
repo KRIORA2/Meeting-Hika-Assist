@@ -1,20 +1,39 @@
-import { Router } from "express";
+import { Router, type Request, type Response } from "express";
 import { openai } from "@workspace/integrations-openai-ai-server";
 import { AnalyzeContextBody, TranscribeAudioBody } from "@workspace/api-zod";
 import type { ChatCompletionContentPart } from "openai/resources/chat/completions";
 import { Buffer } from "node:buffer";
-import fs from "fs";
 import path from "path";
 import pdfParse from "pdf-parse";
 import mammoth from "mammoth";
+import { readUserDocument, consumeCredits, grantCredits, CREDIT_COSTS } from "../lib/store";
 
 const router = Router();
+
+async function takeCredits(req: Request, res: Response, amount: number) {
+  const result = await consumeCredits(req.authUser!.id, amount);
+  if (!result.ok) {
+    res.status(402).json({
+      error: "Not enough credits. Open Pricing in the web app to upgrade.",
+      credits: result.credits,
+      plan: result.plan,
+    });
+    return null;
+  }
+  return result;
+}
 const DEFAULT_ANALYSIS_MODEL = process.env.OPENAI_MODEL || "gpt-4.1";
 const DEFAULT_TRANSCRIPTION_MODEL = process.env.OPENAI_TRANSCRIPTION_MODEL || "gpt-4o-transcribe";
 const DEFAULT_EMBEDDING_MODEL = process.env.OPENAI_EMBEDDING_MODEL || "text-embedding-3-small";
 const DEFAULT_REALTIME_MODEL = process.env.OPENAI_REALTIME_MODEL || "gpt-realtime";
 const DEFAULT_REALTIME_TRANSCRIPTION_MODEL = process.env.OPENAI_REALTIME_TRANSCRIPTION_MODEL || "gpt-4o-mini-transcribe";
 const DEFAULT_REALTIME_NOISE_REDUCTION = process.env.OPENAI_REALTIME_NOISE_REDUCTION === "far_field" ? "far_field" : "near_field";
+const ALLOWED_ANALYSIS_MODELS = new Set(
+  (process.env.OPENAI_ALLOWED_MODELS || "gpt-4.1,gpt-4o")
+    .split(",")
+    .map((model) => model.trim())
+    .filter(Boolean),
+);
 
 function envInteger(name: string, fallback: number, min: number, max: number) {
   const value = Number.parseInt(process.env[name] ?? "", 10);
@@ -29,7 +48,7 @@ function envNumber(name: string, fallback: number, min: number, max: number) {
 const REALTIME_CONFIG = {
   clientSecretTtlSeconds: envInteger("OPENAI_REALTIME_CLIENT_SECRET_TTL_SECONDS", 600, 10, 7200),
   maxOutputTokens: envInteger("OPENAI_REALTIME_MAX_OUTPUT_TOKENS", 220, 32, 4096),
-  vadThreshold: envNumber("OPENAI_REALTIME_VAD_THRESHOLD", 0.45, 0, 1),
+  vadThreshold: envNumber("OPENAI_REALTIME_VAD_THRESHOLD", 0.28, 0, 1),
   vadPrefixPaddingMs: envInteger("OPENAI_REALTIME_VAD_PREFIX_PADDING_MS", 200, 0, 2000),
   interviewVadSilenceMs: envInteger("INTERVIEW_VAD_SILENCE_MS", 900, 300, 2000),
   meetingVadSilenceMs: envInteger("MEETING_VAD_SILENCE_MS", 1000, 300, 2000),
@@ -47,9 +66,10 @@ type EmbeddingCacheEntry = {
  */
 router.post("/openai/realtime/session", async (req, res) => {
   const sessionGuidance = typeof req.body?.sessionGuidance === "string"
-    ? req.body.sessionGuidance.slice(0, 1_500)
+    ? req.body.sessionGuidance.slice(0, 4_000)
     : "";
   const mode = req.body?.mode === "meeting" ? "meeting" : "interview";
+  const autoAnswer = req.body?.autoAnswer !== false;
   const uploadedDocs = Array.isArray(req.body?.uploadedDocs)
     ? req.body.uploadedDocs.slice(0, 3).filter((doc: unknown): doc is { id: string; name?: string } =>
       !!doc && typeof (doc as { id?: unknown }).id === "string")
@@ -60,19 +80,19 @@ router.post("/openai/realtime/session", async (req, res) => {
     return;
   }
 
+  const spent = await takeCredits(req, res, CREDIT_COSTS.realtime);
+  if (!spent) return;
+
   // Document extraction happens once when the persistent Realtime session is
   // created, never for every partial transcription event.
   const documentContext: string[] = [];
   if (uploadedDocs.length) {
-    const uploadDir = path.join(process.cwd(), "uploads");
     for (const doc of uploadedDocs) {
       try {
-        const found = fs.existsSync(uploadDir)
-          ? fs.readdirSync(uploadDir).find((file) => file.startsWith(doc.id))
-          : undefined;
-        if (!found) continue;
-        const content = (await extractDocumentText(path.join(uploadDir, found))).replace(/\s+/g, " ").trim();
-        if (content) documentContext.push(`${doc.name || "Profile"}: ${buildResumeSignal(content).slice(0, 900)}`);
+        const stored = await readUserDocument(req.authUser!.id, doc.id);
+        if (!stored) continue;
+        const content = (await extractDocumentTextFromBuffer(stored.name, stored.buffer)).replace(/\s+/g, " ").trim();
+        if (content) documentContext.push(`${doc.name || stored.name || "Profile"}: ${buildResumeSignal(content).slice(0, 2200)}`);
       } catch {
         // A document is optional context; it must not block live voice setup.
       }
@@ -81,27 +101,28 @@ router.post("/openai/realtime/session", async (req, res) => {
 
   const modeInstructions = mode === "interview"
     ? [
-      "The speaker is answering an interviewer. Treat the most recent completed user turn as the exact question, including shorthand and follow-up questions.",
-      "Give a natural answer the speaker can say aloud. Use confident first person only when the supplied candidate context supports it; otherwise give a technically correct answer without inventing experience.",
-      "For behavioural questions, make the answer concrete with a compact situation, action, and result. For technical questions, explain the direct answer first, then one practical example, trade-off, or implementation detail.",
+      "You are the candidate on a live call. Answer in first person as that person, using the resume, job description, and session guidance as your identity.",
+      "Treat the most recent completed user turn as the exact question, including shorthand and follow-ups.",
+      "Sound like a real technical person talking on screen, not a script: contractions, a short opener, then the real answer. Example: 'Yeah that's a nice one — so the dataflow is events land in storage, Databricks Autoloader picks them up, we bronze/silver/gold it, and late data merges with a watermark.'",
+      "For behavioural questions, keep STAR implicit in conversational form. For technical questions, give the direct answer first, then one real example from the resume when it exists.",
     ]
     : [
-      "Treat the most recent completed user turn as the exact request, including shorthand and follow-up questions.",
-      "For decisions or action questions, state the recommendation first, then the brief rationale or next step. Keep related turns connected, but do not summarize the whole meeting unless asked.",
+      "You are that same professional on a live client call. Write as them in first person when session guidance or the resume says to act as them.",
+      "Treat the most recent completed user turn as the exact request.",
+      "For decisions, say the recommendation like a colleague would, then a brief why.",
     ];
 
   const instructions = [
-    "You are Hikanest Live Assist, a fast, context-aware copilot for live interviews and meetings.",
-    "Understand the speaker's actual intent before answering. Silently correct obvious transcription mistakes, typos, and incomplete phrasing using the surrounding conversation and supplied context.",
-    "Answer the question directly and specifically. Do not give generic advice, a generic summary, an agenda, or chatbot filler such as 'I can help', 'As an AI', or 'Based on the conversation'.",
-    "Output polished natural free text only: no JSON, no confidence score, no role labels, and no headings such as 'Recommended Answer'. Do not repeat the question.",
-    "Use a short paragraph by default; use brief bullets only when they make an explanation, comparison, or steps clearer.",
-    "Be accurate, practical, and specific. Never invent facts, project details, metrics, or candidate experience. If essential information is missing, state the assumption briefly and give the best useful answer.",
-    "Keep ordinary answers under 140 words while remaining direct. For interview questions, give a detailed candidate answer with responsibilities, technical decisions, impact, and one relevant example when supported by supplied context. Include code only when it is requested, and keep code immediately usable.",
-    "For technical questions that request code, scripts, or queries, especially SQL, Python, PySpark, Spark SQL, Databricks, or Scala, output the complete runnable code/query first, then explain it, then add only necessary assumptions or notes. Do not explain at length before the code.",
+    "You write this person's on-screen answers. Never speak with voice. Never generate audio.",
+    "Adopt the domain in the resume and guidance — data engineer, backend, ML, whatever they actually are — and stay in that voice.",
+    "Understand the speaker's actual intent. Silently fix transcription mistakes using context.",
+    "Answer the question directly on screen. No 'As an AI', no 'Great question', no 'Based on the conversation', no headings, no JSON.",
+    "Conversational English only. Short paragraph. Sound human. Do not invent projects, metrics, or employers.",
+    "If a skill is not in the resume, say you have working knowledge and can ramp — do not fake ownership.",
+    "Keep ordinary answers under 160 words. Include code only when asked.",
     ...modeInstructions,
-    sessionGuidance ? `Session guidance:\n${sessionGuidance}` : "",
-    documentContext.length ? `Relevant candidate context (use only when supported):\n${documentContext.join("\n")}` : "",
+    sessionGuidance ? `Persona / session guidance from the user (follow this strictly):\n${sessionGuidance}` : "",
+    documentContext.length ? `Resume and documents (this is who you are):\n${documentContext.join("\n")}` : "",
   ].filter(Boolean).join("\n");
 
   const silenceDurationMs = mode === "meeting"
@@ -122,7 +143,7 @@ router.post("/openai/realtime/session", async (req, res) => {
           threshold: REALTIME_CONFIG.vadThreshold,
           prefix_padding_ms: REALTIME_CONFIG.vadPrefixPaddingMs,
           silence_duration_ms: silenceDurationMs,
-          create_response: false,
+          create_response: autoAnswer,
           interrupt_response: true,
         },
       },
@@ -143,17 +164,20 @@ router.post("/openai/realtime/session", async (req, res) => {
     });
     const response = await upstream.json().catch(() => null) as { value?: unknown; expires_at?: unknown } | null;
     if (!upstream.ok) {
+      await grantCredits(req.authUser!.id, CREDIT_COSTS.realtime).catch(() => undefined);
       req.log.error({ status: upstream.status }, "Realtime client secret request failed");
       res.status(502).json({ error: "Could not authorize the realtime voice connection." });
       return;
     }
     if (!response || typeof response.value !== "string" || typeof response.expires_at !== "number") {
+      await grantCredits(req.authUser!.id, CREDIT_COSTS.realtime).catch(() => undefined);
       req.log.error("Realtime client secret response was malformed");
       res.status(502).json({ error: "Realtime authorization response was invalid." });
       return;
     }
-    res.json({ clientSecret: response.value, expiresAt: response.expires_at });
+    res.json({ clientSecret: response.value, expiresAt: response.expires_at, credits: spent.credits });
   } catch (err) {
+    await grantCredits(req.authUser!.id, CREDIT_COSTS.realtime).catch(() => undefined);
     req.log.error({ err }, "Realtime client secret request failed");
     res.status(502).json({ error: "Could not reach the realtime authorization service." });
   }
@@ -230,21 +254,20 @@ function confidenceScoreFromLabel(value?: string): number {
   return 72;
 }
 
-async function extractDocumentText(filePath: string): Promise<string> {
-  const ext = path.extname(filePath).toLowerCase();
+async function extractDocumentTextFromBuffer(fileName: string, buffer: Buffer): Promise<string> {
+  const ext = path.extname(fileName).toLowerCase();
 
   if (ext === ".txt" || ext === ".md" || ext === ".json" || ext === ".csv") {
-    return fs.readFileSync(filePath, "utf8");
+    return buffer.toString("utf8");
   }
 
   if (ext === ".pdf") {
-    const buffer = fs.readFileSync(filePath);
     const parsed = await pdfParse(buffer);
     return parsed.text || "";
   }
 
   if (ext === ".docx") {
-    const parsed = await mammoth.extractRawText({ path: filePath });
+    const parsed = await mammoth.extractRawText({ buffer });
     return parsed.value || "";
   }
 
@@ -260,11 +283,8 @@ function isLikelyCode(text: string): boolean {
   return /\n\s*(select|with|from|where|join|group by|order by|def |import |spark\.|df\.)/i.test(t);
 }
 
-function shouldUseDocumentGrounding(text: string, docs?: Array<{ id?: string; name?: string }> | null): boolean {
-  if (!docs?.length) return false;
-  const t = text.toLowerCase();
-  return /(resume|cv|background|experience|project|tell me about yourself|introduce yourself|roles and responsibilities|strengths|responsibilities)/i.test(t)
-    || docs.some((d) => isResumeLikeFile(d.name || ""));
+function shouldUseDocumentGrounding(_text: string, docs?: Array<{ id?: string; name?: string }> | null): boolean {
+  return Boolean(docs?.length);
 }
 
 function detectRequestedLanguage(text: string): "sql" | "python" | "auto" {
@@ -406,9 +426,9 @@ async function getOrBuildDocEmbeddings(docKey: string, content: string): Promise
 async function retrieveRelevantResumeContext(args: {
   uploadedDocs?: Array<{ id?: string; name?: string }>;
   query: string;
-  uploadDir: string;
+  userId: string;
 }): Promise<string> {
-  const { uploadedDocs, query, uploadDir } = args;
+  const { uploadedDocs, query, userId } = args;
   if (!uploadedDocs || uploadedDocs.length === 0) return "";
 
   const normalizedQuery = normalizeContextText(query);
@@ -427,14 +447,10 @@ async function retrieveRelevantResumeContext(args: {
   for (const d of uploadedDocs.slice(0, 5)) {
     const id = d.id;
     const name = d.name || id || "file";
-    if (!id || !fs.existsSync(uploadDir)) continue;
-
-    const files = fs.readdirSync(uploadDir);
-    const found = files.find((f) => f.startsWith(id));
-    if (!found) continue;
-
-    const fullPath = path.join(uploadDir, found);
-    const content = (await extractDocumentText(fullPath)).replace(/\s+/g, " ").trim();
+    if (!id) continue;
+    const stored = await readUserDocument(userId, id);
+    if (!stored) continue;
+    const content = (await extractDocumentTextFromBuffer(stored.name, stored.buffer)).replace(/\s+/g, " ").trim();
     if (!content) continue;
 
     const docKey = `${id}:${name}`;
@@ -633,13 +649,12 @@ router.post("/openai/analyze", async (req, res) => {
     return;
   }
 
-  const { transcript, screenshotBase64 } = parsed.data;
-  const uploadedDocs = (parsed.data as any).uploadedDocs as Array<{ id?: string; name?: string }> | undefined;
-  const history = Array.isArray((req.body as any)?.history) ? (req.body as any).history : [];
-  const requestedModel = typeof (req.body as { model?: unknown }).model === "string"
-    ? (req.body as { model: string }).model
-    : undefined;
-  const analysisModel = requestedModel || DEFAULT_ANALYSIS_MODEL;
+  const { transcript, screenshotBase64, uploadedDocs, history = [], mode, model: requestedModel } = parsed.data;
+  const spent = await takeCredits(req, res, CREDIT_COSTS.analyze);
+  if (!spent) return;
+  const analysisModel = requestedModel && ALLOWED_ANALYSIS_MODELS.has(requestedModel)
+    ? requestedModel
+    : DEFAULT_ANALYSIS_MODEL;
   const explicitQuestion = extractExplicitQuestion(transcript);
   const resumeQuestion = isResumeQuestion(explicitQuestion ?? transcript);
   const useGrounding = shouldUseDocumentGrounding(explicitQuestion ?? transcript, uploadedDocs);
@@ -672,27 +687,21 @@ router.post("/openai/analyze", async (req, res) => {
       const docsLines: string[] = [];
       let resumeGrounding = "";
       try {
-        const UPLOAD_DIR = path.join(process.cwd(), "uploads");
         const docsToRead = uploadedDocs.slice(0, 3);
         for (const d of docsToRead) {
           const id = d.id;
           const name = d.name || id || "file";
           docsLines.push(`- ${name}`);
-
+          if (!id) continue;
           try {
-            if (id && fs.existsSync(UPLOAD_DIR)) {
-              const files = fs.readdirSync(UPLOAD_DIR);
-              const found = files.find(f => f.startsWith(id));
-              if (found) {
-                const fullPath = path.join(UPLOAD_DIR, found);
-                const content = (await extractDocumentText(fullPath)).replace(/\s+/g, " ").trim();
-                if (content) {
-                  const clipped = content.slice(0, 2400);
-                  docsLines.push(`Content (first 1200 chars):\n${clipped}`);
-                  if (!resumeGrounding && (resumeQuestion || isResumeLikeFile(name))) {
-                    resumeGrounding = buildResumeSignal(clipped) || clipped;
-                  }
-                }
+            const stored = await readUserDocument(req.authUser!.id, id);
+            if (!stored) continue;
+            const content = (await extractDocumentTextFromBuffer(stored.name, stored.buffer)).replace(/\s+/g, " ").trim();
+            if (content) {
+              const clipped = content.slice(0, 7000);
+              docsLines.push(`Content (first 1200 chars):\n${clipped}`);
+              if (!resumeGrounding && (resumeQuestion || isResumeLikeFile(name))) {
+                resumeGrounding = buildResumeSignal(clipped) || clipped;
               }
             }
           } catch { /* non-fatal */ }
@@ -712,18 +721,14 @@ router.post("/openai/analyze", async (req, res) => {
           for (const d of docsToRead) {
             const id = d.id;
             const name = d.name || id || "file";
+            if (!id) continue;
             try {
-              if (id && fs.existsSync(UPLOAD_DIR)) {
-                const files = fs.readdirSync(UPLOAD_DIR);
-                const found = files.find((f) => f.startsWith(id));
-                if (found) {
-                  const fullPath = path.join(UPLOAD_DIR, found);
-                  const content = (await extractDocumentText(fullPath)).replace(/\s+/g, " ").trim();
-                  const relevantSnippet = buildRelevantDocumentSnippet(content, explicitQuestion ?? transcript ?? "");
-                  if (relevantSnippet) {
-                    docContextLines.push(`Document: ${name}\nRelevant excerpt:\n${relevantSnippet}`);
-                  }
-                }
+              const stored = await readUserDocument(req.authUser!.id, id);
+              if (!stored) continue;
+              const content = (await extractDocumentTextFromBuffer(stored.name, stored.buffer)).replace(/\s+/g, " ").trim();
+              const relevantSnippet = buildRelevantDocumentSnippet(content, explicitQuestion ?? transcript ?? "");
+              if (relevantSnippet) {
+                docContextLines.push(`Document: ${name}\nRelevant excerpt:\n${relevantSnippet}`);
               }
             } catch { /* non-fatal */ }
           }
@@ -739,7 +744,7 @@ router.post("/openai/analyze", async (req, res) => {
         const semanticContext = await retrieveRelevantResumeContext({
           uploadedDocs,
           query: explicitQuestion ?? transcript ?? "",
-          uploadDir: path.join(process.cwd(), "uploads"),
+          userId: req.authUser!.id,
         });
         if (semanticContext) {
           userContent.push({
@@ -754,110 +759,52 @@ router.post("/openai/analyze", async (req, res) => {
 
     const inferredQuestion = explicitQuestion ?? transcript ?? "";
     const questionType = detectQuestionType(inferredQuestion);
+    const spokenAnswer = !isCodeIntent(inferredQuestion);
 
     const completion = await openai.chat.completions.create({
       model: analysisModel,
-      temperature: 0.2,
-      top_p: 0.9,
+      temperature: spokenAnswer ? 0.72 : 0.15,
+      top_p: spokenAnswer ? 0.95 : 0.9,
       messages: [
         {
           role: "system",
-          content: `You are Hikanest Live Assist, a real-time interview and meeting copilot.
+          content: `You write on-screen answers for a live ${mode}. Never speak with voice. Never generate audio. GPT-4.1 only returns text the user reads.
 
-Role:
-- Behave like an experienced technical mentor sitting beside the candidate during a live interview.
-- You are not a chatbot and must never produce generic ChatGPT-like replies.
-- You must continuously use transcript context, prior turns, and uploaded resume/document evidence.
+Session mode: ${mode}
+Detected question type: ${questionType}
 
-Current detected question type: ${questionType}
+Identity:
+- Become the person in the uploaded resume, job description, and free-text session guidance.
+- If they said "act like me as a senior data engineer" (or any other domain), stay in that role the whole session.
+- Answer in first person as them. You are not a coach sitting beside them.
 
-Core behavior:
-- Think before answering. Understand the actual question, not just the keywords.
-- Infer intent from context, shorthand, partial sentences, spelling mistakes, and prior conversation.
-- Handle typos and malformed phrasing silently. For example, interpret "databrik", "pyspak", "azur", "micrsoft", "resme" as Databricks, PySpark, Azure, Microsoft, and Resume.
-- Treat follow-up questions as connected to earlier context unless the user clearly changes the topic.
-- Remember prior conversation, uploaded files, and resume information when relevant.
-- Never sound robotic, generic, or repetitive. Avoid filler phrases like "As an AI" or "I can help" unless truly necessary.
-- Write like a strong professional with 8–15 years of experience: clear, practical, confident, and grounded.
-- Never say "As an AI" or "According to the information".
-- Sound like a real candidate: "In my project...", "While working at...", "I implemented...".
+Voice:
+- Write like a real human talking: conversational English, contractions, natural rhythm. Display it on screen only.
+- Allowed openers: "Yeah", "Yeah that's a nice one", "So basically", "Right, so", "Honestly", or just start the answer.
+- Example: "Yeah that's a good one actually — so the dataflow is pretty simple. Events land in ADLS, Autoloader picks them up, we run bronze to silver to gold, and late records get merged with a watermark so the dashboard stays correct."
+- Forbidden openers: "Certainly", "Great question", "As a data engineer with X years", "Based on the information provided", "As an AI".
+- Do not write essays, headings, keyword lists, resume-match bullets, or interview tips.
+- Keep answers under 160 words unless they asked for code or a deep walkthrough.
 
-When a resume or profile document is uploaded:
-- Read it as authoritative context for the user's background.
-- Extract and remember structured details such as name, experience, companies, projects, skills, responsibilities, education, certifications, achievements, and timeline.
-- Use that profile to tailor every response. If the user asks about introductions, strengths, responsibilities, project experience, career summary, or interview questions, answer from the resume automatically and naturally.
-- If the resume mentions specific tools, platforms, or domains, reflect them in the answer. For example, if the resume shows Databricks, Azure, Python, or Spark, the responses should sound aligned with those experiences.
-- If details are missing, say that you could not find enough information to answer accurately rather than inventing facts.
-- If a technology is not present in resume/project evidence, explicitly state "I have theoretical understanding and can ramp up quickly" instead of pretending direct hands-on ownership.
+Evidence:
+- Use the resume, JD, and session guidance as ground truth. Never invent employers, projects, or metrics.
+- If a skill is not in the resume, say you have working knowledge and can ramp quickly.
+- Silently fix transcription typos using domain context (databrik → Databricks, pyspak → PySpark).
 
-When the user asks interview questions:
-- Answer as if you are that candidate, not as a textbook narrator.
-- Use first-person language such as "I worked on...", "I was responsible for...", and "In my project..." when the resume supports it.
-- Sound practical and experience-based, with examples, trade-offs, and realistic insight.
-- Make the answer feel like a strong interview response: direct, confident, structured, and tailored to the resume.
-- If the resume contains real achievements, use them. If the resume contains strong technical skills, make the answer reflect those skills naturally.
-- Avoid generic interview coaching language. Be specific and believable.
+When they ask for code/SQL/PySpark:
+- Put complete runnable code first, then a short explanation.
 
-Answer strategy by question type:
-- Resume/HR: concise personal narrative with role progression and impact.
-- Behavioral: use STAR flow (Situation, Task, Action, Result) naturally.
-- Project: include architecture, role, responsibilities, challenge, solution, business impact.
-- Coding: include approach, optimized solution, complexity, edge cases.
-- Technical: include definition, real project example, advantages, limitations, best practices.
-- Follow-up/"explain further": continue from the previous answer, do not restart from scratch.
-
-When handling documents:
-- Use uploaded PDFs, DOCX, TXT, Markdown, PowerPoint, Excel, JSON, code files, and OCR-style image content when relevant.
-- Do not hallucinate. Answer only from the supplied material when appropriate.
-
-When answering questions:
-- Start with the most relevant point first.
-- Be concise, but complete.
-- Prefer direct answers over vague commentary.
-- For normal conversation, respond like a helpful professional: natural, conversational, clear, and human.
-- For interview questions, respond like an interview-winning candidate: polished, confident, tailored to the resume, and grounded in real experience.
-- For technical questions, provide complete and accurate solutions with practical reasoning.
-- For SQL, Python, PySpark, Azure, data engineering, or development questions, provide working code or queries when appropriate.
-- For any question asking for code, a script, or a query, especially SQL, Python, PySpark, Spark SQL, Databricks, Scala, or similar technologies, put the complete runnable code/query first. Put the explanation immediately after the code, followed by only necessary assumptions or notes. Never put a long explanation before the code.
-- For coding tasks, understand the existing architecture before suggesting changes and avoid isolated snippets unless the user asks for them.
-- Explain why a change is useful or necessary when it adds value.
-- Make the answer feel as if it was written by a real expert, not a template or a generic AI assistant.
-
-Meeting assistant behavior:
-- Understand meeting transcripts, tasks, decisions, action items, and follow-up needs.
-- Produce concise summaries, clear notes, and useful follow-up content.
-
-Answer quality rules:
-- Be correct, relevant, accurate, and context-aware.
-- Avoid generic fluff.
-- If the information is insufficient, say: "I couldn't find enough information to answer accurately."
-- Never fabricate details.
-
-Output format:
-Return ONLY valid JSON with this structure:
+Output JSON only:
 {
   "question": "Concise label ≤60 chars",
   "questionType": "${questionType}",
-  "recommendedAnswer": "Complete high-quality answer the candidate can say aloud",
-  "answer": "Same answer, with no headings or templates",
+  "recommendedAnswer": "The on-screen answer in a natural human tone",
+  "answer": "The on-screen answer in a natural human tone",
   "confidence": "high|medium|low",
-  "sections": [
-    {
-      "type": "code|bullets|example|explanation|summary",
-      "title": "Section title",
-      "language": "sql|python|bash|hcl|scala|json|null",
-      "content": "COMPLETE working content here"
-    }
-  ]
+  "sections": []
 }
 
-Important:
-- Never use "Meeting context" as the question label.
-- Never write placeholder code like "# your logic here" or "...".
-- For SQL/Python/PySpark/code requests, the top-level answer should be code-first and not prose.
-- For code-first requests, make the first answer content the complete executable code/query; explanations belong after it in the sections.
-- For interview or meeting answers, return only the polished answer the candidate should say. Do not include keywords, resume matches, follow-up suggestions, interview tips, confidence scores, headings, or labels.
-- Do not apologize or add meta-commentary.`,
+The answer field is text on screen. Never instruct the user to speak it. No labels. No meta commentary.`,
         },
         { role: "user", content: userContent },
       ],
@@ -942,9 +889,11 @@ Important:
       suggestions: result.suggestions ?? [],
       confidence: result.confidence ?? "low",
       sections,
+      credits: spent.credits,
     });
   } catch (err) {
     req.log.error({ err }, "OpenAI analyze error");
+    await grantCredits(req.authUser!.id, CREDIT_COSTS.analyze).catch(() => undefined);
     res.status(500).json({ error: "Failed to analyze context" });
   }
 });
@@ -959,12 +908,24 @@ router.post("/openai/transcribe", async (req, res) => {
   const { audioBase64, mimeType = "audio/webm" } = parsed.data;
 
   try {
+    if (!/^audio\/(webm|ogg|mp4|mpeg|mp3)(?:;|$)/i.test(mimeType)) {
+      res.status(415).json({ error: "Unsupported audio format" });
+      return;
+    }
     const audioBuffer = Buffer.from(audioBase64, "base64");
+
+    if (audioBuffer.length > 10 * 1024 * 1024) {
+      res.status(413).json({ error: "Audio chunk is too large" });
+      return;
+    }
 
     if (audioBuffer.length < 500) {
       res.json({ transcript: "" });
       return;
     }
+
+    const spent = await takeCredits(req, res, CREDIT_COSTS.transcribe);
+    if (!spent) return;
 
     const ext = mimeType.includes("mp4")
       ? "mp4"
@@ -987,20 +948,14 @@ router.post("/openai/transcribe", async (req, res) => {
       typeof transcription === "string"
         ? transcription
         : ((transcription as { text?: string }).text ?? "");
-    res.json({ transcript: text.trim() });
-  } catch (err: any) {
-  console.error("========== OPENAI ERROR ==========");
-  console.error(err);
-
-  if (err.response) {
-    console.error(await err.response.text?.());
+    res.json({ transcript: text.trim(), credits: spent.credits });
+  } catch (err) {
+    await grantCredits(req.authUser!.id, CREDIT_COSTS.transcribe).catch(() => undefined);
+    req.log.error({ err }, "OpenAI transcription failed");
+    res.status(500).json({
+      error: "Failed to transcribe audio",
+    });
   }
-
-  res.status(500).json({
-    error: err.message,
-    details: err,
-  });
-}
 });
 
 export default router;

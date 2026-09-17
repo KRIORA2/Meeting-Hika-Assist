@@ -5,9 +5,15 @@
  * Hika.ai API specification - AI Meeting Assistant
  * OpenAPI spec version: 0.1.0
  */
+import type { AnalyzeInputMode } from './analyzeInputMode';
+import type { AnalyzeInputUploadedDocsItem } from './analyzeInputUploadedDocsItem';
+import type { ConversationTurn } from './conversationTurn';
 
 export interface AnalyzeInput {
-  /** Recent meeting transcript text */
+  /**
+     * Recent meeting transcript text
+     * @maxLength 12000
+     */
   transcript: string;
   /**
      * Optional base64-encoded PNG screenshot of the meeting screen
@@ -16,4 +22,14 @@ export interface AnalyzeInput {
   screenshotBase64?: string | null;
   /** @nullable */
   sessionId?: number | null;
+  mode?: AnalyzeInputMode;
+  /** Requested model; the API enforces its server-side allowlist */
+  model?: string;
+  /** @maxItems 12 */
+  history?: ConversationTurn[];
+  /**
+     * Optional uploaded documents to use as grounded context
+     * @maxItems 3
+     */
+  uploadedDocs?: AnalyzeInputUploadedDocsItem[];
 }

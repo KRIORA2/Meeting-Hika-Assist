@@ -4,7 +4,7 @@ import tailwindcss from "@tailwindcss/vite";
 import path from "path";
 import runtimeErrorOverlay from "@replit/vite-plugin-runtime-error-modal";
 
-const rawPort = process.env.PORT ?? "5173";
+const rawPort = process.env.VITE_DEV_PORT ?? "5173";
 const port = Number(rawPort);
 
 if (Number.isNaN(port) || port <= 0) {
@@ -15,6 +15,7 @@ const basePath = process.env.BASE_PATH ?? "/";
 
 export default defineConfig({
   base: basePath,
+  envDir: path.resolve(import.meta.dirname, "../.."),
   plugins: [
     react(),
     tailwindcss(),

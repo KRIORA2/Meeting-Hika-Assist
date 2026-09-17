@@ -25,8 +25,13 @@ function loadEnvFile(filePath: string) {
 loadEnvFile(path.resolve(__dirname, "../../../.env"));
 loadEnvFile(path.resolve(__dirname, "../.env"));
 
-console.log("GOOGLE_CLIENT_ID:", process.env.GOOGLE_CLIENT_ID);
-console.log("HIKA_GOOGLE_CLIENT_ID:", process.env.HIKA_GOOGLE_CLIENT_ID);
+if (process.env.NODE_ENV === "production") {
+  for (const key of ["OPENAI_API_KEY", "CORS_ALLOWED_ORIGINS"]) {
+    if (!process.env[key]?.trim()) {
+      throw new Error(`${key} is required in production.`);
+    }
+  }
+}
 
 const [{ default: app }, { logger }] = await Promise.all([
   import("./app"),

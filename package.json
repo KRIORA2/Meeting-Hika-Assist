@@ -4,8 +4,12 @@
   "license": "MIT",
   "packageManager": "pnpm@10.14.0",
   "scripts": {
+    "dev": "pnpm --parallel --filter @workspace/api-server --filter @workspace/hika run dev",
+    "dev:web": "pnpm --filter @workspace/hika run dev",
+    "dev:api": "pnpm --filter @workspace/api-server run dev",
+    "dev:desktop": "pnpm --filter @workspace/hika-desktop run dev",
     "build": "pnpm run typecheck && pnpm -r --if-present run build",
-    "typecheck:libs": "tsc --build",
+    "typecheck:libs": "tsc --build --force",
     "verify:realtime": "node scripts/verify-realtime-security.mjs",
     "typecheck": "pnpm run typecheck:libs && pnpm -r --filter \"./artifacts/**\" --filter \"./scripts\" --if-present run typecheck"
   },

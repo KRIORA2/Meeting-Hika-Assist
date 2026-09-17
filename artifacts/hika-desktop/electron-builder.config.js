@@ -29,14 +29,15 @@ module.exports = {
     artifactName: "Hikanest-Setup.${ext}",
     // Code Signing: electron-builder automatically signs when
     // CSC_LINK (base64 .pfx) and CSC_KEY_PASSWORD are set as env vars.
-    signingHashAlgorithms: ["sha256"],
-    signDlls: true,
+    signtoolOptions: {
+      signingHashAlgorithms: ["sha256"],
+    },
   },
 
   publish: {
     provider: "github",
-    owner: "A2Forge",
-    repo: "hika-assist",
+    owner: "KRIORA2",
+    repo: "Meeting-Hika-Assist",
     releaseType: isPrerelease ? "prerelease" : "release",
   },
 

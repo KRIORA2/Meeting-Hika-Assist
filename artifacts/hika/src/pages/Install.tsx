@@ -6,17 +6,17 @@ export default function Install() {
 
   const downloads = {
     Windows: {
-      url: "https://github.com/A2Forge/hika-assist/releases/latest/download/Hikanest-Setup.exe",
+      url: "https://github.com/KRIORA2/Meeting-Hika-Assist/releases/latest/download/Hikanest-Setup.exe",
       fileName: "Hikanest-Setup.exe",
       available: true,
     },
     macOS: {
-      url: "https://github.com/A2Forge/hika-assist/releases/latest/download/Hikanest-1.0.0.dmg",
+      url: "https://github.com/KRIORA2/Meeting-Hika-Assist/releases/latest/download/Hikanest.dmg",
       fileName: "Hikanest.dmg",
       available: false,
     },
     Linux: {
-      url: "https://github.com/A2Forge/hika-assist/releases/latest/download/Hikanest-1.0.0.AppImage",
+      url: "https://github.com/KRIORA2/Meeting-Hika-Assist/releases/latest/download/Hikanest.AppImage",
       fileName: "Hikanest.AppImage",
       available: false,
     },
@@ -53,10 +53,10 @@ export default function Install() {
           </button>
           <button
             type="button"
-            onClick={() => navigate("/login")}
+            onClick={() => navigate("/dashboard")}
             className="rounded-2xl border border-white/10 bg-white/5 px-4 py-2 text-sm font-semibold text-white/90 hover:bg-white/10"
           >
-            Sign in
+            Dashboard
           </button>
         </div>
 
@@ -104,9 +104,10 @@ export default function Install() {
                 <button
                   type="button"
                   onClick={() => confirmAndDownload(item.title as keyof typeof downloads)}
-                  className="inline-flex items-center justify-center w-full rounded-2xl bg-gradient-to-r from-[#6366f1] to-[#8b5cf6] px-4 py-3 text-sm font-semibold text-white hover:opacity-90"
+                  disabled={!downloads[item.title as keyof typeof downloads].available}
+                  className="inline-flex items-center justify-center w-full rounded-2xl bg-gradient-to-r from-[#6366f1] to-[#8b5cf6] px-4 py-3 text-sm font-semibold text-white hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
                 >
-                  {item.button}
+                  {downloads[item.title as keyof typeof downloads].available ? item.button : "Coming soon"}
                 </button>
               </div>
             ))}
