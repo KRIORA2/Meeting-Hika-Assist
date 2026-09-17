@@ -194,7 +194,14 @@ async function init() {
 
   // Populate mic sources
   await loadMicSources();
-  micSource.addEventListener("change", () => { selectedDeviceId = micSource.value; });
+  micSource.addEventListener("change", () => {
+    selectedDeviceId = micSource.value;
+    persistMicDevice(selectedDeviceId);
+    if (isRecording) showToast("Stop, then Listen again to use that microphone.");
+  });
+  navigator.mediaDevices?.addEventListener?.("devicechange", () => {
+    if (!isRecording) void loadMicSources();
+  });
 
   // Event listeners
   startBtn.addEventListener("click", handleStart);
@@ -460,25 +467,76 @@ async function uploadDocuments(files, listElement) {
 }
 
 // ── Mic source selector ────────────────────────────────────────────────────────
+const LOOPBACK_MIC = /stereo mix|what u hear|loopback|cable (in|out)|vb-audio|voicemeeter|virtual cable|hdmi|display audio|monitor of/i;
+const HALLUCINATED_TRANSCRIPT = /^(thanks for watching|thank you for watching|please subscribe|subscribe|bye\.?|you|thanks\.?|\.|\[music\]|\[silence\]|thank you\.?)$/i;
+
+function persistMicDevice(deviceId) {
+  if (!deviceId) return;
+  try { localStorage.setItem("hikaMicDeviceId", deviceId); } catch { /* ignore */ }
+}
+
+function savedMicDevice() {
+  try { return localStorage.getItem("hikaMicDeviceId") || ""; } catch { return ""; }
+}
+
+function scoreMicrophone(device, preferredId) {
+  const label = device.label || "";
+  if (LOOPBACK_MIC.test(label)) return -100;
+  if (preferredId && device.deviceId === preferredId) return 200;
+  if (device.deviceId === "default" || /^default\b/i.test(label)) return 120;
+  if (/communications/i.test(label)) return 90;
+  if (/headset|headphone|earbud|airpods|bluetooth/i.test(label)) return 80;
+  if (/microphone|mic array|internal/i.test(label)) return 40;
+  return 10;
+}
+
+function pickPreferredMic(mics, preferredId) {
+  if (!mics.length) return "";
+  const ranked = [...mics].sort((left, right) => scoreMicrophone(right, preferredId) - scoreMicrophone(left, preferredId));
+  return ranked[0].deviceId;
+}
+
+function isHallucinatedTranscript(text) {
+  const value = String(text || "").replace(/\s+/g, " ").trim();
+  if (!value) return true;
+  return HALLUCINATED_TRANSCRIPT.test(value);
+}
+
+function appendCapturedTranscript(existing, incoming) {
+  const next = String(incoming || "").replace(/\s+/g, " ").trim();
+  if (!next || isHallucinatedTranscript(next)) return existing || "";
+  const current = String(existing || "").replace(/\s+/g, " ").trim();
+  if (!current) return next;
+  if (current.endsWith(next)) return current;
+  if (next.startsWith(current) && next.length > current.length) return next;
+  return `${current} ${next}`.replace(/\s+/g, " ").trim();
+}
+
 async function loadMicSources() {
+  if (isRecording) return;
+  const previous = selectedDeviceId || savedMicDevice();
   try {
-    // Request permission first so labels are populated
     const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    stream.getTracks().forEach(t => t.stop());
+    const usedId = stream.getAudioTracks()[0]?.getSettings?.().deviceId || "";
+    stream.getTracks().forEach((track) => track.stop());
 
     const devices = await navigator.mediaDevices.enumerateDevices();
-    const mics = devices.filter(d => d.kind === "audioinput");
+    const mics = devices.filter((device) => device.kind === "audioinput");
 
     micSource.innerHTML = "";
-    mics.forEach(d => {
+    mics.forEach((device) => {
       const opt = document.createElement("option");
-      opt.value = d.deviceId;
-      opt.textContent = d.label || `Mic ${micSource.options.length + 1}`;
+      opt.value = device.deviceId;
+      opt.textContent = device.label || `Mic ${micSource.options.length + 1}`;
+      if (LOOPBACK_MIC.test(device.label || "")) opt.textContent += " (skip — not a mic)";
       micSource.appendChild(opt);
     });
 
-    if (mics.length > 0) selectedDeviceId = mics[0].deviceId;
+    selectedDeviceId = pickPreferredMic(mics, previous || usedId);
+    if (micSource && selectedDeviceId) micSource.value = selectedDeviceId;
+    persistMicDevice(selectedDeviceId);
   } catch {
+    micSource.innerHTML = "";
     const opt = document.createElement("option");
     opt.value = "";
     opt.textContent = "Default mic";
@@ -853,6 +911,14 @@ async function startRecording() {
     track.enabled = true;
     warnedSilentMic = false;
     silentListenFrames = 0;
+    const micLabel = track.label || "Microphone";
+    if (micSource && track.getSettings?.().deviceId) {
+      const actualId = track.getSettings().deviceId;
+      if (actualId && micSource.value !== actualId) {
+        const match = Array.from(micSource.options).find((option) => option.value === actualId);
+        if (match) micSource.value = actualId;
+      }
+    }
 
     // Listen-only while the mic is open. Answers fire when the user stops.
     // Do not construct MediaRecorder on this stream before Realtime starts —
@@ -861,13 +927,14 @@ async function startRecording() {
       isRecording = true;
       setListeningUI(true);
       recIndicator.hidden = false;
-      statusDot.textContent = "● Listening";
+      statusDot.textContent = `● Listening · ${micLabel}`;
       statusDot.className = "status-dot rec";
       liveTxEl.style.display = "flex";
       setTranscriptDraft("");
       micTranscriptText = "";
       latestUtterance = "";
       transcriptReadyForAsk = false;
+      setLiveBadge(`● LIVE · ${micLabel}`, "live");
       return;
     }
 
@@ -889,12 +956,12 @@ async function startRecording() {
     };
 
     chunkTimer = setInterval(async () => {
-      if (!mediaRecorder || mediaRecorder.state !== "recording" || pendingAnalyzeOnStop) return;
+      if (!mediaRecorder || mediaRecorder.state !== "recording" || pendingAnalyzeOnStop || isTranscribing) return;
       mediaRecorder.requestData();
       const snap = audioChunks.slice();
       if (!snap.length) return;
       const blob = new Blob(snap, { type: mimeType });
-      if (blob.size < 1200) return;
+      if (blob.size < 2500) return;
       const text = await transcribeBlob(blob);
       if (!text || pendingAnalyzeOnStop) return;
 
@@ -902,19 +969,20 @@ async function startRecording() {
       micTranscriptText = text;
       setTranscriptDraft(text);
       liveTxEl.style.display = "flex";
-    }, 1500);
+    }, 2500);
 
-    mediaRecorder.start(800);
+    mediaRecorder.start(2000);
     isRecording = true;
     setListeningUI(true);
     recIndicator.hidden = false;
-    statusDot.textContent      = "● Listening";
+    statusDot.textContent      = `● Listening · ${micLabel}`;
     statusDot.className        = "status-dot rec";
     liveTxEl.style.display     = "flex";
     setTranscriptDraft("");
     micTranscriptText = "";
     latestUtterance = "";
     transcriptReadyForAsk = false;
+    setLiveBadge(`● LIVE · ${micLabel}`, "live");
 
   } catch (err) {
     const message = err instanceof Error ? err.message : "Microphone access failed.";
@@ -1083,18 +1151,16 @@ async function startRealtimeVoice(stream, reconnect = false) {
       setTranscriptDraft([micTranscriptText, realtimePartialTranscript].filter(Boolean).join(" "));
     } else if (payload.type === "conversation.item.input_audio_transcription.completed") {
       const text = (payload.transcript || realtimePartialTranscript || "").trim();
-      if (text) {
+      if (text && !isHallucinatedTranscript(text)) {
         latestUtterance = text;
-        micTranscriptText = micTranscriptText
-          ? `${micTranscriptText} ${text}`.replace(/\s+/g, " ").trim()
-          : text;
+        micTranscriptText = appendCapturedTranscript(micTranscriptText, text);
         setTranscriptDraft(micTranscriptText);
         if (isRecording && !realtimeStopRequested) setLiveBadge("● LIVE", "live");
         else setLiveBadge("Captured", "captured");
       }
-      realtimePartialTranscript = text;
-      realtimeTranscriptFinalized = Boolean(text);
-      if (text) transcriptReadyForAsk = true;
+      realtimePartialTranscript = isHallucinatedTranscript(text) ? "" : text;
+      realtimeTranscriptFinalized = Boolean(micTranscriptText);
+      if (micTranscriptText) transcriptReadyForAsk = true;
       markRealtimeMetric("transcript_completed");
       if (realtimeStopRequested || pendingAnalyzeOnStop) {
         void finishListenAndAnswer(micTranscriptText || text);
@@ -1164,10 +1230,11 @@ async function startRealtimeVoice(stream, reconnect = false) {
   events.addEventListener("error", scheduleReconnect);
 
   try {
-    stream.getAudioTracks().forEach((track) => {
-      track.enabled = true;
-      peer.addTrack(track, stream);
-    });
+    const micTrack = stream.getAudioTracks()[0];
+    if (micTrack) {
+      micTrack.enabled = true;
+      peer.addTrack(micTrack, stream);
+    }
     peer.addEventListener("track", (event) => {
       event.track.enabled = false;
       event.track.stop();
@@ -1260,8 +1327,11 @@ function stopMeters() {
 async function getMicStream() {
   const existing = micStream?.getAudioTracks?.()[0];
   if (existing && existing.readyState === "live") {
-    existing.enabled = true;
-    return micStream;
+    const existingId = existing.getSettings?.().deviceId;
+    if (!selectedDeviceId || !existingId || existingId === selectedDeviceId) {
+      existing.enabled = true;
+      return micStream;
+    }
   }
   if (micStream) {
     micStream.getTracks().forEach((track) => track.stop());
@@ -1270,16 +1340,22 @@ async function getMicStream() {
 
   const base = {
     echoCancellation: true,
-    noiseSuppression: true,
+    noiseSuppression: false,
     autoGainControl: true,
+    channelCount: 1,
   };
   const attempts = [];
-  if (selectedDeviceId) attempts.push({ audio: { ...base, deviceId: { ideal: selectedDeviceId } } });
+  if (selectedDeviceId && selectedDeviceId !== "default") {
+    attempts.push({ audio: { ...base, deviceId: { exact: selectedDeviceId } } });
+    attempts.push({ audio: { ...base, deviceId: { ideal: selectedDeviceId } } });
+  }
   attempts.push({ audio: base });
   attempts.push({ audio: true });
 
   let lastError = null;
-  for (const constraints of attempts) {
+  for (let index = 0; index < attempts.length; index += 1) {
+    const constraints = attempts[index];
+    const isLast = index === attempts.length - 1;
     try {
       const stream = await navigator.mediaDevices.getUserMedia(constraints);
       const track = stream.getAudioTracks()[0];
@@ -1287,10 +1363,17 @@ async function getMicStream() {
         stream.getTracks().forEach((item) => item.stop());
         continue;
       }
+      if (!isLast && LOOPBACK_MIC.test(track.label || "")) {
+        stream.getTracks().forEach((item) => item.stop());
+        continue;
+      }
       track.enabled = true;
       track.onended = () => {
         if (micStream === stream) micStream = null;
       };
+      selectedDeviceId = track.getSettings?.().deviceId || selectedDeviceId;
+      if (micSource && selectedDeviceId) micSource.value = selectedDeviceId;
+      persistMicDevice(selectedDeviceId);
       micStream = stream;
       return micStream;
     } catch (err) {
@@ -1393,14 +1476,15 @@ async function transcribeBlob(blob) {
   await waitForTranscriptionIdle(6000);
   isTranscribing = true;
 
-  const b64 = await blobToBase64(blob);
-  const maxBytes = Math.min(1200000, Math.max(160000, blob.size));
   try {
+    if (blob.size < 800) return "";
+    const b64 = await blobToBase64(blob);
     const res = await api("POST", "/api/openai/transcribe", {
-      audioBase64: b64.slice(0, Math.floor(maxBytes / 1.35)),
+      audioBase64: b64,
       mimeType: blob.type,
     });
-    return res.transcript || "";
+    const text = (res.transcript || "").replace(/\s+/g, " ").trim();
+    return isHallucinatedTranscript(text) ? "" : text;
   } catch (err) {
     console.error("Transcribe error", err);
     return "";

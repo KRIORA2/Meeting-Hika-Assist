@@ -26,8 +26,9 @@ const DEFAULT_ANALYSIS_MODEL = process.env.OPENAI_MODEL || "gpt-4.1";
 const DEFAULT_TRANSCRIPTION_MODEL = process.env.OPENAI_TRANSCRIPTION_MODEL || "gpt-4o-transcribe";
 const DEFAULT_EMBEDDING_MODEL = process.env.OPENAI_EMBEDDING_MODEL || "text-embedding-3-small";
 const DEFAULT_REALTIME_MODEL = process.env.OPENAI_REALTIME_MODEL || "gpt-realtime";
-const DEFAULT_REALTIME_TRANSCRIPTION_MODEL = process.env.OPENAI_REALTIME_TRANSCRIPTION_MODEL || "gpt-4o-mini-transcribe";
+const DEFAULT_REALTIME_TRANSCRIPTION_MODEL = process.env.OPENAI_REALTIME_TRANSCRIPTION_MODEL || "gpt-4o-transcribe";
 const DEFAULT_REALTIME_NOISE_REDUCTION = process.env.OPENAI_REALTIME_NOISE_REDUCTION === "far_field" ? "far_field" : "near_field";
+const TRANSCRIPTION_PROMPT = "Transcribe only the person speaking into the microphone, word for word. Keep their wording. Do not translate, guess, or complete sentences. Ignore TV, music, keyboard noise, and other speakers.";
 const ALLOWED_ANALYSIS_MODELS = new Set(
   (process.env.OPENAI_ALLOWED_MODELS || "gpt-4.1,gpt-4o")
     .split(",")
@@ -48,10 +49,10 @@ function envNumber(name: string, fallback: number, min: number, max: number) {
 const REALTIME_CONFIG = {
   clientSecretTtlSeconds: envInteger("OPENAI_REALTIME_CLIENT_SECRET_TTL_SECONDS", 600, 10, 7200),
   maxOutputTokens: envInteger("OPENAI_REALTIME_MAX_OUTPUT_TOKENS", 220, 32, 4096),
-  vadThreshold: envNumber("OPENAI_REALTIME_VAD_THRESHOLD", 0.28, 0, 1),
-  vadPrefixPaddingMs: envInteger("OPENAI_REALTIME_VAD_PREFIX_PADDING_MS", 200, 0, 2000),
-  interviewVadSilenceMs: envInteger("INTERVIEW_VAD_SILENCE_MS", 900, 300, 2000),
-  meetingVadSilenceMs: envInteger("MEETING_VAD_SILENCE_MS", 1000, 300, 2000),
+  vadThreshold: envNumber("OPENAI_REALTIME_VAD_THRESHOLD", 0.5, 0, 1),
+  vadPrefixPaddingMs: envInteger("OPENAI_REALTIME_VAD_PREFIX_PADDING_MS", 400, 0, 2000),
+  interviewVadSilenceMs: envInteger("INTERVIEW_VAD_SILENCE_MS", 1100, 300, 2000),
+  meetingVadSilenceMs: envInteger("MEETING_VAD_SILENCE_MS", 1200, 300, 2000),
 };
 
 type EmbeddingCacheEntry = {
@@ -115,7 +116,7 @@ router.post("/openai/realtime/session", async (req, res) => {
   const instructions = [
     "You write this person's on-screen answers. Never speak with voice. Never generate audio.",
     "Adopt the domain in the resume and guidance — data engineer, backend, ML, whatever they actually are — and stay in that voice.",
-    "Understand the speaker's actual intent. Silently fix transcription mistakes using context.",
+    "Answer the spoken question as captured. Do not swap their words for resume keywords or guessed jargon.",
     "Answer the question directly on screen. No 'As an AI', no 'Great question', no 'Based on the conversation', no headings, no JSON.",
     "Conversational English only. Short paragraph. Sound human. Do not invent projects, metrics, or employers.",
     "If a skill is not in the resume, say you have working knowledge and can ramp — do not fake ownership.",
@@ -137,7 +138,10 @@ router.post("/openai/realtime/session", async (req, res) => {
     audio: {
       input: {
         noise_reduction: { type: DEFAULT_REALTIME_NOISE_REDUCTION },
-        transcription: { model: DEFAULT_REALTIME_TRANSCRIPTION_MODEL, language: "en" },
+        transcription: {
+          model: DEFAULT_REALTIME_TRANSCRIPTION_MODEL,
+          prompt: TRANSCRIPTION_PROMPT,
+        },
         turn_detection: {
           type: "server_vad",
           threshold: REALTIME_CONFIG.vadThreshold,
@@ -789,7 +793,7 @@ Voice:
 Evidence:
 - Use the resume, JD, and session guidance as ground truth. Never invent employers, projects, or metrics.
 - If a skill is not in the resume, say you have working knowledge and can ramp quickly.
-- Silently fix transcription typos using domain context (databrik → Databricks, pyspak → PySpark).
+- Only correct obvious same-word misspellings in the transcript. Do not replace the spoken question with a different topic from the resume.
 
 When they ask for code/SQL/PySpark:
 - Put complete runnable code first, then a short explanation.
@@ -942,6 +946,7 @@ router.post("/openai/transcribe", async (req, res) => {
       model: DEFAULT_TRANSCRIPTION_MODEL,
       file: file as unknown as Parameters<typeof openai.audio.transcriptions.create>[0]["file"],
       response_format: "text",
+      prompt: TRANSCRIPTION_PROMPT,
     });
 
     const text =
