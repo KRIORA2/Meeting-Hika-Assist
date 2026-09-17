@@ -9,6 +9,9 @@ import fs from "fs";
 const isDev = !app.isPackaged;
 
 app.commandLine.appendSwitch("autoplay-policy", "no-user-gesture-required");
+if (process.platform === "win32") {
+  app.commandLine.appendSwitch("enable-usermedia-screen-capturing");
+}
 
 type UpdateState = "checking" | "update-available" | "downloading" | "update-downloaded" | "up-to-date" | "error";
 
@@ -222,15 +225,25 @@ function isMediaPermission(permission: string) {
     || permission === "mediaKeySystem";
 }
 
+async function pickLoopbackSource() {
+  const sources = await desktopCapturer.getSources({
+    types: ["screen", "window"],
+    thumbnailSize: { width: 1, height: 1 },
+  });
+  const meetingWindow = sources.find((source) =>
+    /zoom|teams|meet|webex|slack|skype|discord|chrome|msedge|edge/i.test(source.name || "")
+  );
+  return meetingWindow || sources.find((source) => source.id.startsWith("screen:")) || sources[0] || null;
+}
+
 function allowMediaPermissions(ses: Electron.Session) {
   ses.setPermissionRequestHandler((_webContents, permission, callback) => {
     callback(isMediaPermission(permission));
   });
   ses.setPermissionCheckHandler((_webContents, permission) => isMediaPermission(permission));
   ses.setDisplayMediaRequestHandler((_request, callback) => {
-    void desktopCapturer.getSources({ types: ["screen"], thumbnailSize: { width: 1, height: 1 } })
-      .then((sources) => {
-        const source = sources[0];
+    void pickLoopbackSource()
+      .then((source) => {
         if (!source) {
           callback({});
           return;
@@ -528,12 +541,8 @@ ipcMain.handle("capture-screen", async () => {
 
 ipcMain.handle("get-loopback-source", async () => {
   try {
-    const sources = await desktopCapturer.getSources({
-      types: ["screen"],
-      thumbnailSize: { width: 1, height: 1 },
-    });
-    const primary = sources[0];
-    return primary ? { id: primary.id, name: primary.name } : null;
+    const source = await pickLoopbackSource();
+    return source ? { id: source.id, name: source.name } : null;
   } catch {
     return null;
   }

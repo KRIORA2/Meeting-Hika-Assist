@@ -28,22 +28,24 @@ const DEFAULT_EMBEDDING_MODEL = process.env.OPENAI_EMBEDDING_MODEL || "text-embe
 const DEFAULT_REALTIME_MODEL = process.env.OPENAI_REALTIME_MODEL || "gpt-realtime";
 const DEFAULT_REALTIME_TRANSCRIPTION_MODEL = process.env.OPENAI_REALTIME_TRANSCRIPTION_MODEL || "gpt-4o-transcribe";
 const DEFAULT_REALTIME_NOISE_REDUCTION = process.env.OPENAI_REALTIME_NOISE_REDUCTION === "far_field" ? "far_field" : "near_field";
-const TRANSCRIPTION_PROMPT = "American English meeting conversation.";
+const TRANSCRIPTION_PROMPT = "Yeah, so the next question is about the data pipeline and how we handle late arriving records.";
 
 const ENGLISH_FUNCTION_WORDS = new Set([
   "the", "a", "an", "is", "are", "was", "were", "you", "i", "we", "they", "to", "of", "and", "in",
   "that", "it", "for", "on", "with", "this", "have", "be", "what", "how", "why", "can", "do", "does",
   "tell", "me", "about", "your", "my", "so", "yeah", "okay", "ok", "like", "just", "when", "if", "or",
   "not", "but", "from", "at", "as", "would", "could", "should", "will", "there", "here", "please",
-  "yes", "no", "right", "well",
+  "yes", "no", "right", "well", "hello", "hi", "hey",
 ]);
 const FOREIGN_FUNCTION_WORDS = new Set([
   "alsof", "hemel", "het", "een", "van", "niet", "jij", "jullie", "und", "der", "die", "das", "ich",
   "nicht", "que", "para", "como", "esto", "esta", "les", "des", "une", "pas", "avec", "oui",
   "el", "los", "las", "por", "una", "sehr", "ist", "che", "per", "con", "kya", "hai", "aap",
   "kaise", "nahi", "nahin", "haan", "theek", "acha", "accha", "bhai", "kyun", "kyon", "mera",
-  "meri", "tum", "hum", "kaun", "kab", "kahan", "woh", "yeh", "aur",
+  "meri", "tum", "hum", "kaun", "kab", "kahan", "woh", "yeh", "aur", "itu", "bagus", "sekali",
+  "saya", "tidak", "yang", "untuk", "ada", "ini", "hallo", "wie", "geht", "dir", "nuk", "kuptoj",
 ]);
+const HALLUCINATED_TRANSCRIPT = /thanks for watching|thank you for watching|please subscribe|the boy ran quickly|\[music\]|\[silence\]|rewrite:|clarifying:|greeting:|translation:|subtitle:/i;
 
 function looksLikeUsEnglish(text: string) {
   const value = text.replace(/\s+/g, " ").trim();
@@ -51,11 +53,13 @@ function looksLikeUsEnglish(text: string) {
   if (/[\u0900-\u097F\u0980-\u09FF\u0A00-\u0A7F\u0A80-\u0AFF\u0B00-\u0B7F\u0C00-\u0C7F\u0C80-\u0CFF\u0D00-\u0D7F]/.test(value)) {
     return false;
   }
+  if (HALLUCINATED_TRANSCRIPT.test(value)) return false;
   const words = value.toLowerCase().replace(/[^a-z'\s]/g, " ").split(/\s+/).filter(Boolean);
   if (!words.length) return false;
   const englishHits = words.filter((word) => ENGLISH_FUNCTION_WORDS.has(word)).length;
   const foreignHits = words.filter((word) => FOREIGN_FUNCTION_WORDS.has(word)).length;
   if (foreignHits > 0 && foreignHits >= englishHits) return false;
+  if (words.length >= 2 && englishHits === 0) return false;
   if (englishHits === 0 && foreignHits > 0) return false;
   return true;
 }
