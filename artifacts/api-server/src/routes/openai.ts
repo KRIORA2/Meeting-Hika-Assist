@@ -242,7 +242,8 @@ function toParakeetScript(text: string) {
     .replace(/```[\s\S]*?```/g, " ")
     .replace(/^\s*#{1,6}\s+.+$/gm, "")
     .replace(/^\s*\*\*[^*]+\*\*\s*:?\s*$/gm, "")
-    .replace(/^\s*(contextual explanation|cluster inventory confirmation|explanation|interview tip|follow-?up|details|notes)\s*:?\s*$/gim, "")
+    .replace(/^\s*(contextual explanation|cluster inventory confirmation|explanation|interview tip|follow-?up|details|notes|what is data skew.*)\s*:?\s*$/gim, "")
+    .replace(/^\s*[A-Z][A-Z0-9 /,&:\-]{10,}\s*$/gm, "")
     .replace(/\*\*/g, "")
     .trim();
 
@@ -1009,9 +1010,9 @@ Keep sections empty unless they explicitly asked for code. Put newline character
       questionType: result.questionType ?? questionType,
       answer,
       domain: result.domain ?? "General Business",
-      suggestions: result.suggestions ?? [],
+      suggestions: [],
       confidence: result.confidence ?? "low",
-      sections,
+      sections: codeIntent ? sections : [],
       credits: spent.credits,
     });
   } catch (err) {

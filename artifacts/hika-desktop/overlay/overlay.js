@@ -1995,7 +1995,8 @@ function toParakeetScript(text) {
     .replace(/```[\s\S]*?```/g, " ")
     .replace(/^\s*#{1,6}\s+.+$/gm, "")
     .replace(/^\s*\*\*[^*]+\*\*\s*:?\s*$/gm, "")
-    .replace(/^\s*(contextual explanation|cluster inventory confirmation|explanation|interview tip|follow-?up|details|notes)\s*:?\s*$/gim, "")
+    .replace(/^\s*(contextual explanation|cluster inventory confirmation|explanation|interview tip|follow-?up|details|notes|what is data skew.*)\s*:?\s*$/gim, "")
+    .replace(/^\s*[A-Z][A-Z0-9 /,&:\-]{10,}\s*$/gm, "")
     .replace(/\*\*/g, "")
     .trim();
 
