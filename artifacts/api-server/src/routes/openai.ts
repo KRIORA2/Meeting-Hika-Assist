@@ -28,7 +28,37 @@ const DEFAULT_EMBEDDING_MODEL = process.env.OPENAI_EMBEDDING_MODEL || "text-embe
 const DEFAULT_REALTIME_MODEL = process.env.OPENAI_REALTIME_MODEL || "gpt-realtime";
 const DEFAULT_REALTIME_TRANSCRIPTION_MODEL = process.env.OPENAI_REALTIME_TRANSCRIPTION_MODEL || "gpt-4o-transcribe";
 const DEFAULT_REALTIME_NOISE_REDUCTION = process.env.OPENAI_REALTIME_NOISE_REDUCTION === "far_field" ? "far_field" : "near_field";
-const TRANSCRIPTION_PROMPT = "US English transcript of one microphone speaker. Use American spelling. Write only English words. Do not use Hindi or any other language. Do not translate into another language. Do not invent words.";
+const TRANSCRIPTION_PROMPT = "American English meeting conversation.";
+
+const ENGLISH_FUNCTION_WORDS = new Set([
+  "the", "a", "an", "is", "are", "was", "were", "you", "i", "we", "they", "to", "of", "and", "in",
+  "that", "it", "for", "on", "with", "this", "have", "be", "what", "how", "why", "can", "do", "does",
+  "tell", "me", "about", "your", "my", "so", "yeah", "okay", "ok", "like", "just", "when", "if", "or",
+  "not", "but", "from", "at", "as", "would", "could", "should", "will", "there", "here", "please",
+  "yes", "no", "right", "well",
+]);
+const FOREIGN_FUNCTION_WORDS = new Set([
+  "alsof", "hemel", "het", "een", "van", "niet", "jij", "jullie", "und", "der", "die", "das", "ich",
+  "nicht", "que", "para", "como", "esto", "esta", "les", "des", "une", "pas", "avec", "oui",
+  "el", "los", "las", "por", "una", "sehr", "ist", "che", "per", "con", "kya", "hai", "aap",
+  "kaise", "nahi", "nahin", "haan", "theek", "acha", "accha", "bhai", "kyun", "kyon", "mera",
+  "meri", "tum", "hum", "kaun", "kab", "kahan", "woh", "yeh", "aur",
+]);
+
+function looksLikeUsEnglish(text: string) {
+  const value = text.replace(/\s+/g, " ").trim();
+  if (!value) return false;
+  if (/[\u0900-\u097F\u0980-\u09FF\u0A00-\u0A7F\u0A80-\u0AFF\u0B00-\u0B7F\u0C00-\u0C7F\u0C80-\u0CFF\u0D00-\u0D7F]/.test(value)) {
+    return false;
+  }
+  const words = value.toLowerCase().replace(/[^a-z'\s]/g, " ").split(/\s+/).filter(Boolean);
+  if (!words.length) return false;
+  const englishHits = words.filter((word) => ENGLISH_FUNCTION_WORDS.has(word)).length;
+  const foreignHits = words.filter((word) => FOREIGN_FUNCTION_WORDS.has(word)).length;
+  if (foreignHits > 0 && foreignHits >= englishHits) return false;
+  if (englishHits === 0 && foreignHits > 0) return false;
+  return true;
+}
 const ALLOWED_ANALYSIS_MODELS = new Set(
   (process.env.OPENAI_ALLOWED_MODELS || "gpt-4.1,gpt-4o")
     .split(",")
@@ -117,6 +147,7 @@ router.post("/openai/realtime/session", async (req, res) => {
     "You write this person's on-screen answers. Never speak with voice. Never generate audio.",
     "Adopt the domain in the resume and guidance — data engineer, backend, ML, whatever they actually are — and stay in that voice.",
     "Write every answer in US English with American spelling. Never reply in Hindi or any other language.",
+    "If the transcript is not a clear US English question, say you did not catch the question. Do not invent a topic from foreign or nonsense words.",
     "Answer the spoken question as captured. Do not swap their words for resume keywords or guessed jargon.",
     "Answer the question directly on screen. No 'As an AI', no 'Great question', no 'Based on the conversation', no headings, no JSON.",
     "Conversational US English only. Short paragraph. Sound human. Do not invent projects, metrics, or employers.",
@@ -662,6 +693,20 @@ router.post("/openai/analyze", async (req, res) => {
     ? requestedModel
     : DEFAULT_ANALYSIS_MODEL;
   const explicitQuestion = extractExplicitQuestion(transcript);
+  if (explicitQuestion && !looksLikeUsEnglish(explicitQuestion)) {
+    const restored = await grantCredits(req.authUser!.id, CREDIT_COSTS.analyze).catch(() => null);
+    res.json({
+      question: "Unclear audio",
+      questionType: "general",
+      answer: "I didn't catch a clear English question. Press Listen when they ask again.",
+      domain: "General Business",
+      suggestions: [],
+      confidence: "low",
+      sections: [],
+      credits: restored?.credits ?? spent.credits,
+    });
+    return;
+  }
   const resumeQuestion = isResumeQuestion(explicitQuestion ?? transcript);
   const useGrounding = shouldUseDocumentGrounding(explicitQuestion ?? transcript, uploadedDocs);
 
@@ -787,6 +832,7 @@ Identity:
 Voice:
 - Write like a real human talking: conversational US English, American spelling, contractions, natural rhythm. Display it on screen only.
 - Never write Hindi or any other language. US English only.
+- If the transcript is not a real English question, answer only: I didn't catch a clear English question. Press Listen again.
 - Allowed openers: "Yeah", "Yeah that's a nice one", "So basically", "Right, so", "Honestly", or just start the answer.
 - Example: "Yeah that's a good one actually — so the dataflow is pretty simple. Events land in ADLS, Autoloader picks them up, we run bronze to silver to gold, and late records get merged with a watermark so the dashboard stays correct."
 - Forbidden openers: "Certainly", "Great question", "As a data engineer with X years", "Based on the information provided", "As an AI".
@@ -950,14 +996,16 @@ router.post("/openai/transcribe", async (req, res) => {
       file: file as unknown as Parameters<typeof openai.audio.transcriptions.create>[0]["file"],
       response_format: "text",
       language: "en",
+      temperature: 0,
       prompt: TRANSCRIPTION_PROMPT,
     });
 
-    const text =
+    const raw =
       typeof transcription === "string"
         ? transcription
         : ((transcription as { text?: string }).text ?? "");
-    res.json({ transcript: text.trim(), credits: spent.credits });
+    const text = raw.replace(/\s+/g, " ").trim();
+    res.json({ transcript: looksLikeUsEnglish(text) ? text : "", credits: spent.credits });
   } catch (err) {
     await grantCredits(req.authUser!.id, CREDIT_COSTS.transcribe).catch(() => undefined);
     req.log.error({ err }, "OpenAI transcription failed");

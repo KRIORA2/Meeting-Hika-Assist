@@ -72,6 +72,9 @@ let screenBeforeMinimize = "start";
 let availableUpdateUrl = "";
 let latestUpdateState = null;
 let sessionEnding = false;
+let sessionStarting = false;
+let sessionEpoch = 0;
+let captureGeneration = 0;
 
 function markRealtimeMetric(name) {
   const now = performance.now();
@@ -102,6 +105,7 @@ const meetingNameEl  = $("meeting-name");
 const setupMeetingNameEl = $("setup-meeting-name");
 const sessionGuidanceEl = $("session-guidance");
 const startBtn       = $("start-btn");
+const setupStartBtn  = $("setup-start-btn");
 const hdrTitle       = $("hdr-title");
 const hdrTimer       = $("hdr-timer");
 const statusDot      = $("status-dot");
@@ -207,7 +211,7 @@ async function init() {
 
   // Event listeners
   startBtn.addEventListener("click", handleStart);
-  $("setup-start-btn")?.addEventListener("click", handleStart);
+  setupStartBtn?.addEventListener("click", handleStart);
   $("setup-btn")?.addEventListener("click", showSetupScreen);
   $("setup-back-btn")?.addEventListener("click", showStartScreen);
   continueGoogleBtn?.addEventListener("click", () => { void openWebHandoff("google"); });
@@ -475,7 +479,29 @@ async function uploadDocuments(files, listElement) {
 
 // ── Mic source selector ────────────────────────────────────────────────────────
 const LOOPBACK_MIC = /stereo mix|what u hear|loopback|cable (in|out)|vb-audio|voicemeeter|virtual cable|hdmi|display audio|monitor of/i;
-const HALLUCINATED_TRANSCRIPT = /^(thanks for watching|thank you for watching|please subscribe|subscribe|bye\.?|you|thanks\.?|\.|\[music\]|\[silence\]|thank you\.?)$/i;
+const HALLUCINATED_TRANSCRIPT = /^(thanks for watching|thank you for watching|please subscribe|subscribe|bye\.?|you|thanks\.?|\.|\[music\]|\[silence\]|thank you\.?|alsof de hemel)$/i;
+const ENGLISH_FUNCTION_WORDS = new Set(["the","a","an","is","are","was","were","you","i","we","they","to","of","and","in","that","it","for","on","with","this","have","be","what","how","why","can","do","does","tell","me","about","your","my","so","yeah","okay","ok","like","just","when","if","or","not","but","from","at","as","would","could","should","will","there","here","please","yes","no","right","well"]);
+const FOREIGN_FUNCTION_WORDS = new Set(["alsof","hemel","het","een","van","niet","jij","jullie","und","der","die","das","ich","nicht","que","para","como","esto","esta","les","des","une","pas","avec","oui","el","los","las","por","una","ist","che","per","con","kya","hai","aap","kaise","nahi","nahin","haan","theek","acha","accha","bhai","kyun","kyon","mera","meri","tum","hum","kaun","kab","kahan","woh","yeh","aur"]);
+
+function looksLikeUsEnglish(text) {
+  const value = String(text || "").replace(/\s+/g, " ").trim();
+  if (!value) return false;
+  if (/[\u0900-\u097F\u0980-\u09FF\u0A00-\u0A7F\u0A80-\u0AFF\u0B00-\u0B7F\u0C00-\u0C7F\u0C80-\u0CFF\u0D00-\u0D7F]/.test(value)) return false;
+  const words = value.toLowerCase().replace(/[^a-z'\s]/g, " ").split(/\s+/).filter(Boolean);
+  if (!words.length) return false;
+  const englishHits = words.filter((word) => ENGLISH_FUNCTION_WORDS.has(word)).length;
+  const foreignHits = words.filter((word) => FOREIGN_FUNCTION_WORDS.has(word)).length;
+  if (foreignHits > 0 && foreignHits >= englishHits) return false;
+  if (englishHits === 0 && foreignHits > 0) return false;
+  return true;
+}
+
+function isHallucinatedTranscript(text) {
+  const value = String(text || "").replace(/\s+/g, " ").trim();
+  if (!value) return true;
+  if (!looksLikeUsEnglish(value)) return true;
+  return HALLUCINATED_TRANSCRIPT.test(value);
+}
 
 function isMeetingCapture() {
   return !selectedDeviceId || selectedDeviceId === "meeting";
@@ -505,13 +531,6 @@ function pickPreferredMic(mics, preferredId) {
   if (!mics.length) return "";
   const ranked = [...mics].sort((left, right) => scoreMicrophone(right, preferredId) - scoreMicrophone(left, preferredId));
   return ranked[0].deviceId;
-}
-
-function isHallucinatedTranscript(text) {
-  const value = String(text || "").replace(/\s+/g, " ").trim();
-  if (!value) return true;
-  if (/[\u0900-\u097F\u0980-\u09FF\u0A00-\u0A7F\u0A80-\u0AFF\u0B00-\u0B7F\u0C00-\u0C7F\u0C80-\u0CFF\u0D00-\u0D7F]/.test(value)) return true;
-  return HALLUCINATED_TRANSCRIPT.test(value);
 }
 
 function appendCapturedTranscript(existing, incoming) {
@@ -810,10 +829,28 @@ function exportSession() {
   showToast("✓ Exported");
 }
 
+function visibleStartControl() {
+  return setupScreen?.style.display !== "none" ? (setupStartBtn || startBtn) : startBtn;
+}
+
+function resetStartControls() {
+  sessionStarting = false;
+  if (startBtn) {
+    startBtn.disabled = false;
+    startBtn.textContent = "Start Session";
+  }
+  if (setupStartBtn) {
+    setupStartBtn.disabled = false;
+    setupStartBtn.textContent = "Start session";
+  }
+}
+
 // ── Session ───────────────────────────────────────────────────────────────────
 async function handleStart() {
+  if (sessionStarting) return;
+  if (sessionId && sessionScreen.style.display !== "none") return;
   const title = (setupScreen.style.display !== "none" ? setupMeetingNameEl?.value : meetingNameEl.value).trim() || "Meeting";
-  const startControl = setupScreen.style.display !== "none" ? $("setup-start-btn") : startBtn;
+  const startControl = visibleStartControl();
   const jobContext = (jobPostUrl?.value || "").trim();
   const languageContext = "Write the transcript and every answer in US English with American spelling. Never use Hindi or any other language.";
   sessionGuidance = [
@@ -829,13 +866,18 @@ async function handleStart() {
   forceHttpFallback = false;
   cancelledRealtimeResponseIds.clear();
   sessionEnding = false;
+  sessionStarting = true;
   startControl.disabled = true;
   startControl.textContent = "Starting...";
 
   try {
     const res = await api("POST", "/api/sessions", { title, platform: "other", status: "active" });
+    if (sessionEnding) return;
+    sessionEpoch += 1;
+    captureGeneration += 1;
     sessionId    = res.id;
     sessionStart = Date.now();
+    hdrTimer.textContent = "0:00";
     window.hikaElectron?.setUpdateSessionActive(true);
 
     hdrTitle.textContent            = title;
@@ -850,8 +892,6 @@ async function handleStart() {
     void refreshCredits();
     if (uploadedDocs.length) showToast("Resume and documents loaded. Answers stay on screen.");
   } catch (err) {
-    startControl.disabled = false;
-    startControl.textContent = setupScreen.style.display !== "none" ? "Start session" : "Start Session";
     const msg = err instanceof Error ? err.message : String(err || "");
     if (err?.status === 401) {
       openWebHandoff();
@@ -860,10 +900,13 @@ async function handleStart() {
     }
     alert(`Could not connect to Hikanest API.\n\nAPI URL: ${apiUrl}\n\n${msg || "Check your internet connection and the hosted API service."}`);
     console.error(err);
+  } finally {
+    resetStartControls();
   }
 }
 
 function stopCaptureImmediate() {
+  captureGeneration += 1;
   isRecording = false;
   pendingAnalyzeOnStop = false;
   answerOnStopLock = false;
@@ -877,12 +920,22 @@ function stopCaptureImmediate() {
   clearInterval(chunkTimer);
   chunkTimer = null;
   stopRealtimeVoice(true);
-  try {
-    if (mediaRecorder && mediaRecorder.state !== "inactive") mediaRecorder.stop();
-  } catch {
-    // Recorder may already be gone.
-  }
+  const recorder = mediaRecorder;
   mediaRecorder = null;
+  if (recorder) {
+    recorder.ondataavailable = null;
+    recorder.onstop = null;
+    try {
+      if (recorder.state !== "inactive") recorder.stop();
+    } catch {
+      // Recorder may already be gone.
+    }
+    try {
+      recorder.stream?.getTracks?.().forEach((track) => track.stop());
+    } catch {
+      // Stream may already be gone.
+    }
+  }
   stopAudioPipeline();
   setListeningUI(false);
 }
@@ -891,6 +944,7 @@ function leaveSessionScreen() {
   window.hikaElectron?.setUpdateSessionActive(false);
   clearInterval(timerHandle);
   timerHandle = null;
+  sessionStart = null;
   transcriptChunks = [];
   insights = [];
   latestUtterance = "";
@@ -901,19 +955,26 @@ function leaveSessionScreen() {
   meetingBadge.style.display = "none";
   sessionScreen.style.display = "none";
   showSetupScreen();
-  meetingNameEl.value = "";
-  if (setupMeetingNameEl) setupMeetingNameEl.value = "";
-  startBtn.disabled = false;
-  startBtn.textContent = "Start Session";
+  if (setupMeetingNameEl && hdrTitle?.textContent && hdrTitle.textContent !== "Meeting") {
+    setupMeetingNameEl.value = hdrTitle.textContent;
+  }
+  resetStartControls();
   if (latestUpdateState?.state === "update-downloaded") renderUpdateState(latestUpdateState);
 }
 
 async function handleEnd(event) {
   event?.preventDefault?.();
   event?.stopPropagation?.();
-  if (sessionEnding) return;
-  if (sessionScreen.style.display === "none") return;
+  if (sessionScreen.style.display === "none" && !sessionId) {
+    resetStartControls();
+    showSetupScreen();
+    return;
+  }
+
   sessionEnding = true;
+  sessionEpoch += 1;
+  captureGeneration += 1;
+  sessionStarting = false;
 
   if (clickThrough) {
     clickThrough = false;
@@ -927,6 +988,7 @@ async function handleEnd(event) {
   leaveSessionScreen();
   showToast("Session ended.");
   sessionEnding = false;
+  resetStartControls();
 
   if (endingId) {
     void (saveTranscriptEnabled
@@ -938,6 +1000,7 @@ async function handleEnd(event) {
 
 // ── Timer ─────────────────────────────────────────────────────────────────────
 function startTimer() {
+  clearInterval(timerHandle);
   timerHandle = setInterval(() => {
     if (!sessionStart) return;
     const s = Math.floor((Date.now() - sessionStart) / 1000);
@@ -948,10 +1011,13 @@ function startTimer() {
 
 // ── Audio recording ───────────────────────────────────────────────────────────
 async function toggleRecording() {
+  if (!sessionId || sessionEnding) return;
   if (isRecording) await stopRecording(); else await startRecording();
 }
 
 function startHttpTranscriptRecorder(stream) {
+  const generation = captureGeneration;
+  const epoch = sessionEpoch;
   const recorderOptions = mimeType ? { mimeType } : undefined;
   mediaRecorder = new MediaRecorder(stream, recorderOptions);
   audioChunks = [];
@@ -960,17 +1026,20 @@ function startHttpTranscriptRecorder(stream) {
   };
 
   mediaRecorder.onstop = async () => {
-    if (sessionEnding) return;
+    if (sessionEnding || generation !== captureGeneration || epoch !== sessionEpoch) return;
     await waitForTranscriptionIdle();
+    if (sessionEnding || generation !== captureGeneration || epoch !== sessionEpoch) return;
     const blob = new Blob(audioChunks, { type: mimeType });
     audioChunks = [];
     let text = "";
     if (blob.size >= 800) text = await transcribeBlob(blob);
-    text = (text || currentTranscript()).trim();
+    const fallback = currentTranscript();
+    if (!text && fallback && !isHallucinatedTranscript(fallback)) text = fallback;
     await finishListenAndAnswer(text);
   };
 
   chunkTimer = setInterval(async () => {
+    if (generation !== captureGeneration || epoch !== sessionEpoch) return;
     if (!mediaRecorder || mediaRecorder.state !== "recording" || pendingAnalyzeOnStop || isTranscribing) return;
     mediaRecorder.requestData();
     const snap = audioChunks.slice();
@@ -978,7 +1047,7 @@ function startHttpTranscriptRecorder(stream) {
     const blob = new Blob(snap, { type: mimeType });
     if (blob.size < 1200) return;
     const text = await transcribeBlob(blob);
-    if (!text || pendingAnalyzeOnStop || sessionEnding) return;
+    if (!text || pendingAnalyzeOnStop || sessionEnding || generation !== captureGeneration || epoch !== sessionEpoch) return;
     latestUtterance = text;
     micTranscriptText = text;
     setTranscriptDraft(text);
@@ -989,7 +1058,10 @@ function startHttpTranscriptRecorder(stream) {
 }
 
 async function startRecording() {
+  if (!sessionId || sessionEnding) return;
+  const epoch = sessionEpoch;
   try {
+    captureGeneration += 1;
     pendingAnalyzeOnStop = false;
     answerOnStopLock = false;
     if (listenFinalizeTimer) {
@@ -998,6 +1070,12 @@ async function startRecording() {
     }
     statusDot.textContent = "● Connecting microphone";
     const stream = await buildRecordingStream();
+    if (epoch !== sessionEpoch || sessionEnding || !sessionId) {
+      stream?.getTracks?.().forEach((track) => track.stop());
+      stopAudioPipeline();
+      setListeningUI(false);
+      return;
+    }
     const track = stream.getAudioTracks()[0];
     if (!track || track.readyState !== "live") throw new Error("No active microphone track was found.");
     track.enabled = true;
@@ -1082,7 +1160,8 @@ function stopRealtimeVoice(closedByUser = true) {
 }
 
 async function finishListenAndAnswer(sourceText) {
-  if (sessionEnding || !sessionId) return;
+  const epoch = sessionEpoch;
+  if (sessionEnding || !sessionId || epoch !== sessionEpoch) return;
   if (answerOnStopLock) return;
   answerOnStopLock = true;
   if (listenFinalizeTimer) {
@@ -1093,11 +1172,14 @@ async function finishListenAndAnswer(sourceText) {
   stopRealtimeVoice();
 
   const text = (sourceText || currentTranscript()).trim();
-  if (!text) {
+  if (!text || isHallucinatedTranscript(text)) {
+    latestUtterance = "";
+    micTranscriptText = "";
+    setTranscriptDraft("");
     setLiveBadge("No speech");
     statusDot.textContent = "● Ready";
     statusDot.className = "status-dot";
-    showToast("No speech captured. Press Listen and speak, then Stop.");
+    showToast("Didn't catch clear US English. Press Listen when they ask again.");
     answerOnStopLock = false;
     return;
   }
@@ -1116,6 +1198,7 @@ async function finishListenAndAnswer(sourceText) {
     if (autoAnswerEnabled) {
       await analyze(text);
     } else {
+      if (epoch !== sessionEpoch || sessionEnding || !sessionId) return;
       transcriptReadyForAsk = true;
       askInput.value = text;
       askInput.focus();
@@ -1587,6 +1670,11 @@ async function transcribeBlob(blob) {
 // ── AI Analysis ───────────────────────────────────────────────────────────────
 async function analyze(utterance) {
   if (!utterance || isAnalyzing || sessionEnding || !sessionId) return false;
+  if (isHallucinatedTranscript(utterance)) {
+    showToast("Didn't catch clear US English. Press Listen when they ask again.");
+    return false;
+  }
+  const epoch = sessionEpoch;
   isAnalyzing = true;
   setAnalyzing(true);
 
@@ -1619,7 +1707,7 @@ async function analyze(utterance) {
       ]),
     });
     if (!result) return false;
-    if (sessionEnding || !sessionId) return false;
+    if (sessionEnding || !sessionId || epoch !== sessionEpoch) return false;
 
     const insight = {
       question:    result.question || utterance,
@@ -2031,6 +2119,7 @@ function showStartScreen() {
   if (setupScreen) setupScreen.style.display = "none";
   if (sessionScreen) sessionScreen.style.display = "none";
   if (startScreen) startScreen.style.display = "flex";
+  resetStartControls();
   updateLoginStatus();
 }
 
@@ -2039,6 +2128,7 @@ function showSetupScreen() {
   if (startScreen) startScreen.style.display = "none";
   if (sessionScreen) sessionScreen.style.display = "none";
   if (setupScreen) setupScreen.style.display = "block";
+  resetStartControls();
   void refreshCredits();
 }
 
