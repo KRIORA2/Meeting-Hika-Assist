@@ -141,27 +141,28 @@ router.post("/openai/realtime/session", async (req, res) => {
 
   const modeInstructions = mode === "interview"
     ? [
-      "You are the candidate on a live call. Answer in first person as that person, using the resume, job description, and session guidance as your identity.",
-      "Treat the most recent completed user turn as the exact question, including shorthand and follow-ups.",
-      "Sound like a real technical person talking on screen, not a script: contractions, a short opener, then the real answer. Example: 'Yeah that's a nice one — so the dataflow is events land in storage, Databricks Autoloader picks them up, we bronze/silver/gold it, and late data merges with a watermark.'",
-      "For behavioural questions, keep STAR implicit in conversational form. For technical questions, give the direct answer first, then one real example from the resume when it exists.",
+      "You are the candidate on a live data-engineering interview. Answer in first person as that person.",
+      "Treat the most recent completed user turn as the exact question.",
+      "Parakeet format: one spoken opener, then 3 to 5 short bullets the candidate can glance at and say.",
     ]
     : [
-      "You are that same professional on a live client call. Write as them in first person when session guidance or the resume says to act as them.",
+      "You are that same data engineer on a live work call. Write as them in first person.",
       "Treat the most recent completed user turn as the exact request.",
-      "For decisions, say the recommendation like a colleague would, then a brief why.",
+      "Parakeet format: one spoken opener, then 3 to 5 short teammate talking points.",
     ];
 
   const instructions = [
-    "You write this person's on-screen answers. Never speak with voice. Never generate audio.",
-    "Adopt the domain in the resume and guidance — data engineer, backend, ML, whatever they actually are — and stay in that voice.",
+    "You write this person's on-screen answers like Parakeet. Never speak with voice. Never generate audio.",
+    "You are a real senior data engineer. First person only. Not a coach.",
     "Write every answer in US English with American spelling. Never reply in Hindi or any other language.",
     "If the transcript is not a clear US English question, say you did not catch the question. Do not invent a topic from foreign or nonsense words.",
     "Answer the spoken question as captured. Do not swap their words for resume keywords or guessed jargon.",
-    "Answer the question directly on screen. No 'As an AI', no 'Great question', no 'Based on the conversation', no headings, no JSON.",
-    "Conversational US English only. Short paragraph. Sound human. Do not invent projects, metrics, or employers.",
+    "Format: line 1 is the spoken opener. Then 3 to 5 short bullets starting with •. One idea per line.",
+    "No headings, no JSON, no Contextual Explanation, no inventory confirmation boxes.",
+    "No 'As an AI', no 'Great question', no 'Based on the conversation', no 'I'm not aware'.",
+    "Do not invent projects, metrics, or employers.",
     "If a skill is not in the resume, say you have working knowledge and can ramp — do not fake ownership.",
-    "Keep ordinary answers under 160 words. Include code only when asked.",
+    "Keep ordinary answers under 90 words. Include code only when they explicitly asked for code.",
     ...modeInstructions,
     sessionGuidance ? `Persona / session guidance from the user (follow this strictly):\n${sessionGuidance}` : "",
     documentContext.length ? `Resume and documents (this is who you are):\n${documentContext.join("\n")}` : "",
@@ -233,7 +234,48 @@ const resumeEmbeddingCache = new Map<string, EmbeddingCacheEntry>();
 
 function isCodeIntent(text: string): boolean {
   const t = text.toLowerCase();
-  return /(sql|query|pyspark|spark|python|script|code|databricks|join|group by|cte|window function|row_number)/i.test(t);
+  return /(write (me )?(a |the )?(code|query|script|function)|give me (the )?(code|sql|query|script)|show me (the )?(code|sql|pyspark|query)|paste the (code|query)|executable code|implement (this|it) in|python script|pyspark (code|script)|sql query to)/i.test(t);
+}
+
+function toParakeetScript(text: string) {
+  const cleaned = text
+    .replace(/```[\s\S]*?```/g, " ")
+    .replace(/^\s*#{1,6}\s+.+$/gm, "")
+    .replace(/^\s*\*\*[^*]+\*\*\s*:?\s*$/gm, "")
+    .replace(/^\s*(contextual explanation|cluster inventory confirmation|explanation|interview tip|follow-?up|details|notes)\s*:?\s*$/gim, "")
+    .replace(/\*\*/g, "")
+    .trim();
+
+  let lines = cleaned
+    .split(/\n+/)
+    .map((line) => line.replace(/^\s*(?:[-*]|•)\s+/, "").replace(/\s+/g, " ").trim())
+    .filter(Boolean);
+
+  if (lines.length < 3 && /•/.test(cleaned)) {
+    lines = cleaned
+      .split("•")
+      .map((line) => line.replace(/\s+/g, " ").trim())
+      .filter(Boolean);
+  }
+
+  if (lines.length < 3) {
+    const sentences = cleaned
+      .replace(/\s+/g, " ")
+      .split(/(?<=[.!?])\s+/)
+      .map((sentence) => sentence.trim())
+      .filter((sentence) => sentence.length > 8);
+    if (sentences.length >= 3) lines = sentences;
+  }
+
+  if (lines.length === 0) return "";
+  if (lines.length === 1) return lines[0];
+
+  const opener = lines[0].replace(/^[•\-]\s*/, "");
+  const points = lines.slice(1).map((line) => {
+    const body = line.replace(/^[•\-]\s*/, "").replace(/[.]+$/, "");
+    return `• ${body}`;
+  });
+  return [opener, ...points].join("\n");
 }
 
 function extractExplicitQuestion(text: string): string | null {
@@ -820,55 +862,71 @@ router.post("/openai/analyze", async (req, res) => {
     const inferredQuestion = explicitQuestion ?? transcript ?? "";
     const questionType = detectQuestionType(inferredQuestion);
     const spokenAnswer = !isCodeIntent(inferredQuestion);
+    const modeVoice = mode === "interview"
+      ? `INTERVIEW: You are the candidate. Answer the interviewer the way a hired senior data engineer would actually speak. Direct, first person, concrete. No lecture. No inventory confirmation. No "I can check with admin."`
+      : `MEETING: You are on a live work call. Answer like a data engineer talking to teammates. Decisive. Say what we run and what you would do next. No consultant hedging.`;
 
     const completion = await openai.chat.completions.create({
       model: analysisModel,
-      temperature: spokenAnswer ? 0.72 : 0.15,
-      top_p: spokenAnswer ? 0.95 : 0.9,
+      temperature: spokenAnswer ? 0.55 : 0.15,
+      top_p: spokenAnswer ? 0.9 : 0.9,
       messages: [
         {
           role: "system",
-          content: `You write on-screen answers for a live ${mode}. Never speak with voice. Never generate audio. GPT-4.1 only returns text the user reads.
+          content: `You are a Parakeet-style live copilot. The user glances at your text and speaks it. Never generate audio.
 
 Session mode: ${mode}
 Detected question type: ${questionType}
+${modeVoice}
 
-Identity:
-- Become the person in the uploaded resume, job description, and free-text session guidance.
-- If they said "act like me as a senior data engineer" (or any other domain), stay in that role the whole session.
-- Answer in first person as them. You are not a coach sitting beside them.
+You ARE this person: a real senior data engineer on a live ${mode}. Use the resume, JD, and session guidance as your identity. First person only. You are not a coach.
 
-Voice:
-- Write like a real human talking: conversational US English, American spelling, contractions, natural rhythm. Display it on screen only.
-- Never write Hindi or any other language. US English only.
-- If the transcript is not a real English question, answer only: I didn't catch a clear English question. Press Listen again.
-- Never translate foreign phrases. Never add a Contextual Explanation. Never title the question "Respond to".
-- The question field must be the speaker's English words, not a coach label.
-- Allowed openers: "Yeah", "Yeah that's a nice one", "So basically", "Right, so", "Honestly", or just start the answer.
-- Example: "Yeah that's a good one actually — so the dataflow is pretty simple. Events land in ADLS, Autoloader picks them up, we run bronze to silver to gold, and late records get merged with a watermark so the dashboard stays correct."
-- Forbidden openers: "Certainly", "Great question", "As a data engineer with X years", "Based on the information provided", "As an AI".
-- Do not write essays, headings, keyword lists, resume-match bullets, or interview tips.
-- Keep answers under 160 words unless they asked for code or a deep walkthrough.
+ANSWER FORMAT — this is mandatory, like Parakeet:
+Line 1: a spoken opener plus the direct answer. Contractions. "Yeah", "So basically", "Right, so", or go straight in.
+Then 3 to 5 short bullets. Start each with •. One idea per line. Easy to glance at while talking.
+Under 90 words. No blank section titles.
 
-Evidence:
-- Use the resume, JD, and session guidance as ground truth. Never invent employers, projects, or metrics.
-- If a skill is not in the resume, say you have working knowledge and can ramp quickly.
-- Only correct obvious same-word misspellings in the transcript. Do not replace the spoken question with a different topic from the resume.
+Interview example for cluster types:
+Yeah, so we mainly use three cluster types in Databricks.
+• All-purpose — notebooks and interactive work while I'm developing
+• Job clusters — they spin up for a scheduled job and auto-terminate
+• High concurrency — shared SQL compute so BI users aren't fighting for the same cluster
 
-When they ask for code/SQL/PySpark:
-- Put complete runnable code first, then a short explanation.
+Meeting example for "any other clusters":
+Right — in this workspace it's just those three.
+• Interactive for notebooks
+• Job clusters for scheduled runs
+• High concurrency for SQL / BI
+• I haven't stood up anything else. If a new workload needs its own, I can add it
+
+Behavioral example:
+Yeah, a recent one was late data hitting a gold dashboard.
+• Pipeline was dropping same-day events after a timezone change
+• I added a watermark and a Delta merge on the unique key
+• Dashboard caught up without a full reload
+
+Use real data-engineering language when it fits: bronze/silver/gold, Autoloader, Delta, Unity Catalog, job vs all-purpose clusters, watermarks, shuffle, SCD.
+
+Never do this:
+- Headings or labels like Contextual Explanation, Cluster Inventory Confirmation, Explanation, Interview Tip
+- A single dense paragraph
+- "I'm not aware", "I can check with admin", "as of now these are the main", "Great question", "As a data engineer with X years", "As an AI"
+- Dump REST API, Terraform, or Python unless they explicitly asked for code
+- Invent employers, projects, or metrics. If it is not in the resume, say you have working knowledge and can ramp
+
+If the transcript is not a clear English question, answer only: I didn't catch a clear English question. Press Listen again.
 
 Output JSON only:
 {
   "question": "The speaker's English question, ≤60 chars",
   "questionType": "${questionType}",
-  "recommendedAnswer": "The on-screen answer in a natural human tone",
-  "answer": "The on-screen answer in a natural human tone",
+  "recommendedAnswer": "The Parakeet-style spoken script with line breaks and • bullets",
+  "answer": "The Parakeet-style spoken script with line breaks and • bullets",
   "confidence": "high|medium|low",
   "sections": []
 }
 
-The answer field is text on screen. Never instruct the user to speak it. No labels. No meta commentary.`,
+Keep sections empty unless they explicitly asked for code. Put newline characters in answer. The answer field is the on-screen script.`,
         },
         { role: "user", content: userContent },
       ],
@@ -933,11 +991,12 @@ The answer field is text on screen. Never instruct the user to speak it. No labe
         if (repaired.sections.length) sections.splice(0, sections.length, ...repaired.sections);
       }
     } else {
-      answer = recommendedAnswer || answer;
+      answer = toParakeetScript(recommendedAnswer || answer);
+      sections.splice(0, sections.length);
     }
 
     if (!answer) {
-      answer = "No insights available for the current context.";
+      answer = "I didn't catch a clear English question. Press Listen again.";
     }
 
     const normalizedQuestion = (result.question ?? "").trim();

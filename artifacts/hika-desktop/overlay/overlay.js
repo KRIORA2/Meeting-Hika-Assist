@@ -869,9 +869,11 @@ async function handleStart() {
   const jobContext = (jobPostUrl?.value || "").trim();
   const languageContext = "Write the transcript and every answer in US English with American spelling. Never use Hindi or any other language.";
   sessionGuidance = [
-    "Write as this person in first person. Match their domain (data engineer, backend, ML, etc.) from the resume and the prompt below.",
-    "Show the answer on screen in a natural conversational tone, like a human typing what they would say. Example: 'Yeah that's a nice one actually — so the dataflow is...'. Never use voice or read answers aloud.",
-    selectedSessionMode === "interview" ? "This is an interview. Answer as the candidate." : "This is a regular professional call. Answer as this person.",
+    "Write Parakeet-style on-screen answers: one spoken opener, then 3 to 5 short • bullets a data engineer can glance at and say.",
+    "First person. No headings, no explanation boxes, no inventory confirmation, no REST API or Terraform unless they explicitly asked for code.",
+    selectedSessionMode === "interview"
+      ? "This is a live interview. Answer the interviewer as the candidate — direct talking points, not a lecture."
+      : "This is a live work meeting. Answer as this person talking to teammates — short, decisive talking points.",
     jobContext ? `Job description / role context:\n${jobContext}` : "",
     languageContext,
     (sessionGuidanceEl?.value || "").trim()
@@ -1750,13 +1752,13 @@ async function analyze(utterance) {
     screenshotBase64 = await window.hikaElectron.captureScreen().catch(() => null);
   }
 
-  const codeRequest = /\b(code|pyspark|spark|python|sql|query|script|databricks)\b/i.test(utterance);
+  const codeRequest = /\b(write|show me|give me|paste)\b.{0,40}\b(code|sql|query|script|pyspark|python)\b|\b(executable code|sql query to|pyspark code|python script)\b/i.test(utterance);
   const context = [
     `ANSWER THIS: "${utterance}"`,
     sessionGuidance ? `Session guidance: ${sessionGuidance}` : "",
     codeRequest
-      ? "Return complete executable code first, then a short spoken explanation."
-      : "Answer this exact US English question on screen. Do not invent another topic. Do not add a contextual explanation. Do not title it Respond to.",
+      ? "They explicitly asked for code. Put runnable code after a short spoken line."
+      : "Speak like Parakeet: one opener line, then 3 to 5 short • bullets. First person as a real data engineer. No headings. No REST API unless they asked for code.",
     `Timestamp: ${new Date().toISOString()}`,
   ].filter(Boolean).join("\n");
 
@@ -1911,21 +1913,6 @@ function buildInsightCard(ins) {
   const rendered = renderAnswerBlocks(ins);
   card.appendChild(rendered);
 
-  // Confidence badge
-  const conf = document.createElement("div");
-  conf.className = `confidence conf-${ins.confidence}`;
-  conf.textContent = ins.confidence;
-  card.appendChild(conf);
-
-
-  // Suggestion
-  if (ins.suggestions.length > 0) {
-    const sug = document.createElement("div");
-    sug.className = "ai-suggest";
-    sug.innerHTML = `<span class="ai-suggest-arrow">→</span><span>${escHtml(ins.suggestions[0])}</span>`;
-    card.appendChild(sug);
-  }
-
   return card;
 }
 
@@ -1964,9 +1951,8 @@ function isCodeLike(text) {
   const t = String(text || "").trim();
   if (!t) return false;
   if (t.includes("```")) return true;
-  if (/^(select|with|insert|update|delete|create|alter|drop)\b/i.test(t)) return true;
-  if (/^(import\s+\w+|from\s+\w+\s+import\s+\w+|def\s+\w+\s*\()/i.test(t)) return true;
-  return /\n\s*(select|with|from|where|join|group by|order by|def\s|import\s)/i.test(t);
+  if (/^(select|with|insert|update|delete|create table|alter|drop|import\s+\w+|from\s+\w+\s+import|def\s+\w+\s*\(|spark\s*=)/i.test(t)) return true;
+  return false;
 }
 
 function collectCodeBlocks(ins) {
@@ -2004,52 +1990,84 @@ function matchesLanguageFilter(ins) {
   });
 }
 
+function toParakeetScript(text) {
+  const cleaned = String(text || "")
+    .replace(/```[\s\S]*?```/g, " ")
+    .replace(/^\s*#{1,6}\s+.+$/gm, "")
+    .replace(/^\s*\*\*[^*]+\*\*\s*:?\s*$/gm, "")
+    .replace(/^\s*(contextual explanation|cluster inventory confirmation|explanation|interview tip|follow-?up|details|notes)\s*:?\s*$/gim, "")
+    .replace(/\*\*/g, "")
+    .trim();
+
+  let lines = cleaned
+    .split(/\n+/)
+    .map((line) => line.replace(/^\s*(?:[-*]|•)\s+/, "").replace(/\s+/g, " ").trim())
+    .filter(Boolean);
+
+  if (lines.length < 3 && /•/.test(cleaned)) {
+    lines = cleaned
+      .split("•")
+      .map((line) => line.replace(/\s+/g, " ").trim())
+      .filter(Boolean);
+  }
+
+  if (lines.length < 3) {
+    const sentences = cleaned
+      .replace(/\s+/g, " ")
+      .split(/(?<=[.!?])\s+/)
+      .map((sentence) => sentence.trim())
+      .filter((sentence) => sentence.length > 8);
+    if (sentences.length >= 3) lines = sentences;
+  }
+
+  if (!lines.length) return [];
+  return lines.map((line, index) => line.replace(/^[•\-]\s*/, "").replace(index === 0 ? /$/ : /[.]+$/, ""));
+}
+
+function spokenAnswerText(text) {
+  const lines = toParakeetScript(text);
+  if (!lines.length) return "";
+  if (lines.length === 1) return lines[0];
+  return [lines[0], ...lines.slice(1).map((line) => `• ${line}`)].join("\n");
+}
+
 function renderAnswerBlocks(ins) {
   const wrap = document.createElement("div");
-  const answer = String(ins.answer || "").trim();
-  const blocks = collectCodeBlocks(ins);
-  const textSections = (Array.isArray(ins.sections) ? ins.sections : [])
-    .filter((s) => {
-      const type = String(s?.type || "").toLowerCase();
-      const content = String(s?.content || "").trim();
-      return content && !["code", "sql", "python", "pyspark", "bash", "hcl", "scala", "json"].includes(type);
-    });
+  const rawAnswer = String(ins.answer || "").trim();
+  const blocks = collectCodeBlocks(ins).filter((b) => isCodeLike(b.content));
+  const lines = isCodeLike(rawAnswer) ? [] : toParakeetScript(rawAnswer);
+  const answer = spokenAnswerText(rawAnswer);
 
-  const isPureCode = blocks.length > 0 && answer === blocks[0].content;
-  blocks.forEach((b) => {
-    const block = document.createElement("div");
-    block.className = "ai-code-block";
-    block.innerHTML = `
-      <div class="ai-code-lbl">${escHtml(b.title || "Code")}</div>
-      <pre>${escHtml(b.content)}</pre>
-    `;
-    block.appendChild(makeCopyBtn(b.content));
-    wrap.appendChild(block);
-  });
-
-  if (!isPureCode && answer) {
+  if (lines.length) {
     const aWrap = document.createElement("div");
     aWrap.className = "ai-a-wrap";
     const aText = document.createElement("div");
     aText.className = "ai-a";
-    aText.textContent = answer;
-    const copyAnswerBtn = makeCopyBtn(answer);
+    lines.forEach((line, index) => {
+      const row = document.createElement("div");
+      if (index === 0) {
+        row.className = "ai-a-opener";
+        row.textContent = line;
+      } else {
+        row.className = "ai-a-point";
+        row.textContent = `• ${line}`;
+      }
+      aText.appendChild(row);
+    });
     aWrap.appendChild(aText);
-    aWrap.appendChild(copyAnswerBtn);
+    aWrap.appendChild(makeCopyBtn(answer));
     wrap.appendChild(aWrap);
   }
 
-  textSections.forEach((section) => {
+  blocks.forEach((b) => {
     const block = document.createElement("div");
     block.className = "ai-code-block";
-    block.innerHTML = `
-      <div class="ai-code-lbl">${escHtml(section.title || "Details")}</div>
-      <div class="ai-a">${escHtml(section.content || "")}</div>
-    `;
+    block.innerHTML = `<pre>${escHtml(b.content)}</pre>`;
+    block.appendChild(makeCopyBtn(b.content));
     wrap.appendChild(block);
   });
 
-  if (!answer && !blocks.length) {
+  if (!lines.length && !blocks.length) {
     const empty = document.createElement("div");
     empty.className = "ai-a";
     empty.textContent = "No answer available.";

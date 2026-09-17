@@ -1011,11 +1011,9 @@ function PiPContent({
     const profileContext = [
       sessionGuidanceRef.current ? `Session guidance: ${sessionGuidanceRef.current}` : "",
       sessionMode === "interview"
-        ? "Candidate profile: Respond at a strong 5-6 years professional experience level."
-        : "Meeting mode: Respond as a concise professional copilot; do not pretend to be the user.",
-      sessionMode === "interview"
-        ? "Prefer production-ready, practical, interview-grade responses."
-        : "Prefer direct recommendations, practical reasoning, and clear next actions.",
+        ? "Interview: answer as the candidate, first person, like a real senior data engineer speaking on the call."
+        : "Meeting: answer as this person talking to teammates. Decisive, current, first person.",
+      "Parakeet format: one spoken opener, then 3 to 5 short • bullets. First person. No headings. No REST API unless they asked for code.",
     ].filter(Boolean).join("\n");
 
     const ctx = utterance
