@@ -1,6 +1,6 @@
 import { cert, getApps, initializeApp, type App } from "firebase-admin/app";
 import { getAuth } from "firebase-admin/auth";
-import { getFirestore } from "firebase-admin/firestore";
+import { getFirestore, type Firestore } from "firebase-admin/firestore";
 import { getStorage } from "firebase-admin/storage";
 
 function readServiceAccount() {
@@ -60,7 +60,7 @@ export function adminAuth() {
   return getAuth(getFirebaseApp());
 }
 
-export function adminDb() {
+export function adminDb(): Firestore {
   return getFirestore(getFirebaseApp());
 }
 

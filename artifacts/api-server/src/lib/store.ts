@@ -1,4 +1,10 @@
-import { FieldValue, type DocumentData, type Timestamp } from "firebase-admin/firestore";
+import {
+  FieldValue,
+  type DocumentData,
+  type QueryDocumentSnapshot,
+  type Timestamp,
+  type Transaction,
+} from "firebase-admin/firestore";
 import { adminBucket, adminDb } from "./firebase";
 
 export type SessionRecord = {
@@ -68,8 +74,8 @@ export async function getOwnedSession(userId: string, sessionId: number) {
 export async function listUserSessions(userId: string) {
   const snap = await adminDb().collection("sessions").where("userId", "==", userId).get();
   return snap.docs
-    .map((doc) => sessionFromDoc(doc.id, doc.data()))
-    .sort((left, right) => right.createdAt.localeCompare(left.createdAt));
+    .map((doc: QueryDocumentSnapshot) => sessionFromDoc(doc.id, doc.data()))
+    .sort((left: SessionRecord, right: SessionRecord) => right.createdAt.localeCompare(left.createdAt));
 }
 
 export async function createSession(userId: string, title: string, platform: string) {
@@ -114,7 +120,7 @@ export async function deleteSession(userId: string, sessionId: number) {
   if (!current) return false;
   const insights = await adminDb().collection("insights").where("sessionId", "==", sessionId).get();
   const batch = adminDb().batch();
-  insights.docs.forEach((doc) => batch.delete(doc.ref));
+  insights.docs.forEach((doc: QueryDocumentSnapshot) => batch.delete(doc.ref));
   batch.delete(adminDb().collection("sessions").doc(String(sessionId)));
   await batch.commit();
   return true;
@@ -125,8 +131,8 @@ export async function listSessionInsights(userId: string, sessionId: number) {
   if (!session) return null;
   const snap = await adminDb().collection("insights").where("sessionId", "==", sessionId).get();
   return snap.docs
-    .map((doc) => insightFromDoc(doc.id, doc.data()))
-    .sort((left, right) => right.createdAt.localeCompare(left.createdAt));
+    .map((doc: QueryDocumentSnapshot) => insightFromDoc(doc.id, doc.data()))
+    .sort((left: InsightRecord, right: InsightRecord) => right.createdAt.localeCompare(left.createdAt));
 }
 
 export async function createInsight(
@@ -158,8 +164,8 @@ export async function createInsight(
 export async function getUserStats(userId: string) {
   const sessions = await listUserSessions(userId);
   const totalSessions = sessions.length;
-  const activeSessions = sessions.filter((session) => session.status === "active").length;
-  const totalInsights = sessions.reduce((sum, session) => sum + session.insightCount, 0);
+  const activeSessions = sessions.filter((session: SessionRecord) => session.status === "active").length;
+  const totalInsights = sessions.reduce((sum: number, session: SessionRecord) => sum + session.insightCount, 0);
   return {
     totalSessions,
     activeSessions,
@@ -299,7 +305,7 @@ export async function getUserAccount(userId: string) {
 
 export async function consumeCredits(userId: string, amount: number) {
   const ref = adminDb().collection("users").doc(userId);
-  return adminDb().runTransaction(async (transaction) => {
+  return adminDb().runTransaction(async (transaction: Transaction) => {
     const snap = await transaction.get(ref);
     const account = normalizeAccount(userId, snap.data() || {});
     if (account.credits < amount) {
