@@ -71,6 +71,7 @@ let remainingCredits = null;
 let screenBeforeMinimize = "start";
 let availableUpdateUrl = "";
 let latestUpdateState = null;
+let sessionEnding = false;
 
 function markRealtimeMetric(name) {
   const now = performance.now();
@@ -224,8 +225,8 @@ async function init() {
   if (autoAnswer) autoAnswer.addEventListener("change", () => { autoAnswerEnabled = autoAnswer.checked; });
   if (saveTranscript) saveTranscript.addEventListener("change", () => { saveTranscriptEnabled = saveTranscript.checked; });
   micBtn.addEventListener("click", toggleRecording);
-  endBtn.addEventListener("click", handleEnd);
-  endHdrBtn.addEventListener("click", handleEnd);
+  endBtn?.addEventListener("click", (event) => { void handleEnd(event); });
+  endHdrBtn?.addEventListener("click", (event) => { void handleEnd(event); });
   hideBtn.addEventListener("click", minimizeToLauncher);
   if (wndMinBtn) {
     wndMinBtn.addEventListener("click", minimizeToLauncher);
@@ -807,6 +808,7 @@ async function handleStart() {
   ].filter(Boolean).join("\n");
   forceHttpFallback = false;
   cancelledRealtimeResponseIds.clear();
+  sessionEnding = false;
   startControl.disabled = true;
   startControl.textContent = "Starting...";
 
@@ -841,44 +843,77 @@ async function handleStart() {
   }
 }
 
-async function handleEnd() {
-  if (!sessionId) return;
-  if (isRecording) await stopRecording();
-  try {
-    if (saveTranscriptEnabled) {
-      await api("PATCH", `/api/sessions/${sessionId}`, { status: "ended" });
-    } else {
-      await api("DELETE", `/api/sessions/${sessionId}`);
-    }
-  } catch (err) {
-    console.error("Could not finalize session", err);
-    showToast("Session ended, but history could not be updated.");
-  }
-  window.hikaElectron?.setUpdateSessionActive(false);
-  sessionId    = null;
-  clearInterval(timerHandle);
-  timerHandle  = null;
-  transcriptChunks = [];
-  insights     = [];
-  latestUtterance  = "";
-  micTranscriptText = "";
-  transcriptReadyForAsk = false;
+function stopCaptureImmediate() {
+  isRecording = false;
   pendingAnalyzeOnStop = false;
   answerOnStopLock = false;
+  isAnalyzing = false;
+  isTranscribing = false;
+  realtimeStopRequested = false;
   if (listenFinalizeTimer) {
     clearTimeout(listenFinalizeTimer);
     listenFinalizeTimer = null;
   }
+  clearInterval(chunkTimer);
+  chunkTimer = null;
+  stopRealtimeVoice(true);
+  try {
+    if (mediaRecorder && mediaRecorder.state !== "inactive") mediaRecorder.stop();
+  } catch {
+    // Recorder may already be gone.
+  }
+  mediaRecorder = null;
+  stopAudioPipeline();
+  setListeningUI(false);
+}
+
+function leaveSessionScreen() {
+  window.hikaElectron?.setUpdateSessionActive(false);
+  clearInterval(timerHandle);
+  timerHandle = null;
+  transcriptChunks = [];
+  insights = [];
+  latestUtterance = "";
+  micTranscriptText = "";
+  transcriptReadyForAsk = false;
   setTranscriptDraft("");
   resetSessionStage();
-  meetingBadge.style.display  = "none";
+  meetingBadge.style.display = "none";
   sessionScreen.style.display = "none";
   showSetupScreen();
-  meetingNameEl.value  = "";
+  meetingNameEl.value = "";
   if (setupMeetingNameEl) setupMeetingNameEl.value = "";
-  startBtn.disabled    = false;
+  startBtn.disabled = false;
   startBtn.textContent = "Start Session";
   if (latestUpdateState?.state === "update-downloaded") renderUpdateState(latestUpdateState);
+}
+
+async function handleEnd(event) {
+  event?.preventDefault?.();
+  event?.stopPropagation?.();
+  if (sessionEnding) return;
+  if (sessionScreen.style.display === "none") return;
+  sessionEnding = true;
+
+  if (clickThrough) {
+    clickThrough = false;
+    window.hikaElectron?.setClickThrough(false);
+    updateClickThroughUI();
+  }
+
+  const endingId = sessionId;
+  sessionId = null;
+  stopCaptureImmediate();
+  leaveSessionScreen();
+  showToast("Session ended.");
+  sessionEnding = false;
+
+  if (endingId) {
+    void (saveTranscriptEnabled
+      ? api("PATCH", `/api/sessions/${endingId}`, { status: "ended" })
+      : api("DELETE", `/api/sessions/${endingId}`)
+    ).catch((err) => console.error("Could not finalize session", err));
+  }
 }
 
 // ── Timer ─────────────────────────────────────────────────────────────────────
@@ -1048,6 +1083,7 @@ function stopRealtimeVoice(closedByUser = true) {
 }
 
 async function finishListenAndAnswer(sourceText) {
+  if (sessionEnding || !sessionId) return;
   if (answerOnStopLock) return;
   answerOnStopLock = true;
   if (listenFinalizeTimer) {
@@ -1495,7 +1531,7 @@ async function transcribeBlob(blob) {
 
 // ── AI Analysis ───────────────────────────────────────────────────────────────
 async function analyze(utterance) {
-  if (!utterance || isAnalyzing) return false;
+  if (!utterance || isAnalyzing || sessionEnding || !sessionId) return false;
   isAnalyzing = true;
   setAnalyzing(true);
 
@@ -1528,6 +1564,7 @@ async function analyze(utterance) {
       ]),
     });
     if (!result) return false;
+    if (sessionEnding || !sessionId) return false;
 
     const insight = {
       question:    result.question || utterance,
