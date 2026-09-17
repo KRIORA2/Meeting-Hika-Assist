@@ -50,6 +50,9 @@ contextBridge.exposeInMainWorld("hikaElectron", {
   captureScreen: (): Promise<string | null> =>
     ipcRenderer.invoke("capture-screen"),
 
+  getLoopbackSource: (): Promise<{ id: string; name: string } | null> =>
+    ipcRenderer.invoke("get-loopback-source"),
+
   getSecureItem: (key: string): Promise<string | null> =>
     ipcRenderer.invoke("secure-storage-get", key),
 
@@ -94,6 +97,7 @@ declare global {
       setClickThrough: (enabled: boolean) => Promise<void>;
       setSize: (width: number, height: number) => Promise<void>;
       captureScreen: () => Promise<string | null>;
+      getLoopbackSource: () => Promise<{ id: string; name: string } | null>;
       getSecureItem: (key: string) => Promise<string | null>;
       setSecureItem: (key: string, value: string) => Promise<void>;
       removeSecureItem: (key: string) => Promise<void>;

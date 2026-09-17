@@ -218,6 +218,7 @@ function isMediaPermission(permission: string) {
   return permission === "media"
     || permission === "microphone"
     || permission === "audioCapture"
+    || permission === "display-capture"
     || permission === "mediaKeySystem";
 }
 
@@ -226,6 +227,18 @@ function allowMediaPermissions(ses: Electron.Session) {
     callback(isMediaPermission(permission));
   });
   ses.setPermissionCheckHandler((_webContents, permission) => isMediaPermission(permission));
+  ses.setDisplayMediaRequestHandler((_request, callback) => {
+    void desktopCapturer.getSources({ types: ["screen"], thumbnailSize: { width: 1, height: 1 } })
+      .then((sources) => {
+        const source = sources[0];
+        if (!source) {
+          callback({});
+          return;
+        }
+        callback({ video: source, audio: "loopback" });
+      })
+      .catch(() => callback({}));
+  });
 }
 
 async function requestMicrophoneAccess() {
@@ -508,6 +521,19 @@ ipcMain.handle("capture-screen", async () => {
     const primary = sources[0];
     if (!primary) return null;
     return primary.thumbnail.toJPEG(80).toString("base64");
+  } catch {
+    return null;
+  }
+});
+
+ipcMain.handle("get-loopback-source", async () => {
+  try {
+    const sources = await desktopCapturer.getSources({
+      types: ["screen"],
+      thumbnailSize: { width: 1, height: 1 },
+    });
+    const primary = sources[0];
+    return primary ? { id: primary.id, name: primary.name } : null;
   } catch {
     return null;
   }

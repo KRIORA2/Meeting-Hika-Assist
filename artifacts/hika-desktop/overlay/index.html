@@ -121,7 +121,7 @@
 
       <div class="setup-section two-column">
         <label><span class="setup-label">Output model</span><select id="model-select" class="setup-select"><option value="gpt-4.1">GPT-4.1</option><option value="gpt-4o">GPT-4o</option></select></label>
-        <label><span class="setup-label">Language</span><select id="output-language" class="setup-select"><option value="English">English</option><option value="Spanish">Spanish</option><option value="French">French</option></select></label>
+        <label><span class="setup-label">Language</span><select id="output-language" class="setup-select"><option value="US English" selected>US English</option></select></label>
       </div>
 
       <div class="behavior-row"><div><strong>Answer on stop</strong><span>When you stop the mic, analyze the captured transcript immediately</span></div><label class="switch"><input id="auto-answer" type="checkbox" checked /><span></span></label></div>
@@ -171,7 +171,7 @@
           <span id="rec-indicator" class="rec-pulse" hidden>● Listening</span>
         </div>
         <div id="live-tx" class="tx-live">
-          <textarea id="live-tx-text" aria-label="Live transcript" spellcheck="true" placeholder="Press Listen. Speech appears here live."></textarea>
+          <textarea id="live-tx-text" aria-label="Live transcript" spellcheck="true" placeholder="Press Listen when the other person asks. Their words appear here in US English."></textarea>
         </div>
       </section>
 
@@ -206,17 +206,17 @@
         <button class="mic-btn" id="mic-btn" type="button" title="Start listening">🎤</button>
         <div class="listen-copy">
           <strong id="mic-label">Listen</strong>
-          <span id="mic-hint">Capture audio</span>
+          <span id="mic-hint">Other person in the meeting</span>
         </div>
       </div>
       <select id="mic-source" class="src-select" title="Microphone source"></select>
       <div class="audio-meter" id="audio-meter" title="Audio input levels">
         <div class="meter-row">
-          <span class="meter-lbl">Mic</span>
+          <span class="meter-lbl">Call</span>
           <div class="meter-track"><div id="meter-mic-fill" class="meter-fill mic"></div></div>
         </div>
         <div class="meter-row">
-          <span class="meter-lbl">Client</span>
+          <span class="meter-lbl">Them</span>
           <div class="meter-track"><div id="meter-client-fill" class="meter-fill client"></div></div>
         </div>
       </div>
