@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import {
   isCodeIntent,
+  isPointwiseQuestion,
   looksLikeUsEnglish,
   scoreEmployeeAnswer,
 } from "../../artifacts/api-server/src/lib/answer-quality.ts";
@@ -15,12 +16,19 @@ import {
 assert.ok(pack.length >= 15, "Golden pack must freeze at least 15 interview questions");
 
 for (const item of pack) {
-  const good = scoreEmployeeAnswer(item.good, isCodeIntent(item.question));
-  const bad = scoreEmployeeAnswer(item.bad, isCodeIntent(item.question));
+  const keepPoints = isPointwiseQuestion(item.question);
+  const good = scoreEmployeeAnswer(item.good, isCodeIntent(item.question), keepPoints);
+  const bad = scoreEmployeeAnswer(item.bad, isCodeIntent(item.question), keepPoints);
   assert.equal(good.ok, true, `${item.id} good answer failed: ${good.reason}`);
   assert.equal(bad.ok, false, `${item.id} bad answer was accepted`);
 }
 
+assert.equal(isPointwiseQuestion("What are the transformations you have used in your project to load the data?"), true);
+assert.equal(isPointwiseQuestion("So what do you mean by left join, right join and inner join?"), true);
+assert.equal(isPointwiseQuestion("What are the main components of Azure Data Factory?"), true);
+assert.equal(isPointwiseQuestion("What is Azure Data Factory?"), false);
+assert.equal(isPointwiseQuestion("Tell me about yourself"), false);
+assert.equal(isPointwiseQuestion("Write a PySpark query to read the data from the external storage"), false);
 assert.equal(isCodeIntent("Could you please explain about data skew?"), false);
 assert.equal(isCodeIntent("So what do you mean by left join, right join and inner join?"), false);
 assert.equal(isCodeIntent("What is lake view and where we use this lake view?"), false);
@@ -64,6 +72,15 @@ assert.equal(
   scoreEmployeeAnswer("ADF is a cloud ETL service.\n• Pipelines\n• Activities\n• Linked services\n• Datasets").ok,
   false,
   "Bullet notes must fail",
+);
+assert.equal(
+  scoreEmployeeAnswer(
+    "I don't think of load as a list of PySpark functions. In a typical Azure load I use bronze landing.\n• Filter and select so bronze junk never reaches silver.\n• withColumn for derived fields and standard names.\n• Join reference data, and groupBy only when gold needs an aggregate.",
+    false,
+    true,
+  ).ok,
+  true,
+  "Employee opener plus process points must pass when the question needs points",
 );
 assert.equal(
   scoreEmployeeAnswer("When loading data in my projects, I use a variety of PySpark transformations like filter, select, withColumn, join, groupBy, distinct and orderBy.").ok,

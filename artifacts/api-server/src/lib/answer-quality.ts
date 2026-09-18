@@ -73,6 +73,13 @@ export function isCodeIntent(text: string): boolean {
   return /(write (me )?(a |the )?(code|query|script|function)|give me (the )?(code|sql|query|script)|show me (the )?(code|sql|pyspark|query)|paste the (code|query)|executable code|implement (this|it) in|python script|pyspark (code|script)|sql query to|write a query|write the query|write a pyspark)/i.test(t);
 }
 
+export function isPointwiseQuestion(text: string): boolean {
+  const t = String(text || "").toLowerCase();
+  if (isCodeIntent(t)) return false;
+  if (/(tell me about yourself|introduce yourself|why should we hire you)/i.test(t)) return false;
+  return /(what are the|list (the |out )?|components|types of|kinds of|steps|walk me through|end[- ]to[- ]end|difference between|\bvs\.?\b|versus|compare |advantages|disadvantages|pros and cons|left join|right join|inner join|transformations you have used|what (are|were) the transformations|bronze.{0,20}silver|how (do|did|would) you|how can you|stages|layers|where (do we|we) use)/i.test(t);
+}
+
 export function looksLikeCodeDump(text: string): boolean {
   const t = String(text || "").trim();
   if (!t) return false;
@@ -132,7 +139,7 @@ export function extractKeyPoints(answer: string, limit = 5): string[] {
   return hits;
 }
 
-export function toSpokenAnswer(text: string) {
+export function toSpokenAnswer(text: string, keepPoints = false) {
   const cleaned = String(text || "")
     .replace(/```[\s\S]*?```/g, " ")
     .replace(/^\s*#{1,6}\s+.+$/gm, "")
@@ -144,9 +151,24 @@ export function toSpokenAnswer(text: string) {
     .trim();
 
   if (!cleaned) return "";
-  const hasBullets = /•|^\s*[-*]\s+\S/m.test(cleaned);
+  const hasBullets = /•|^\s*[-*]\s+\S|^\s*\d+[.)]\s+\S/m.test(cleaned);
   if (!hasBullets) {
     return cleaned.replace(/\n{3,}/g, "\n\n").trim();
+  }
+  if (keepPoints) {
+    const rawLines = cleaned.split(/\n+/).map((line) => line.replace(CASUAL_OPENER, "").trim()).filter(Boolean);
+    const opener: string[] = [];
+    const points: string[] = [];
+    for (const line of rawLines) {
+      const isPoint = /^\s*(?:[-*]|•|\d+[.)])\s+/.test(line);
+      const point = line.replace(/^\s*(?:[-*]|•|\d+[.)])\s+/, "").replace(/\s+/g, " ").trim();
+      if (!point) continue;
+      if (isPoint || points.length > 0) points.push(ensurePeriod(point));
+      else opener.push(point);
+    }
+    const head = opener.join(" ").replace(/\s+/g, " ").trim();
+    if (!points.length) return head;
+    return [head, ...points.map((point) => `• ${point}`)].filter(Boolean).join("\n");
   }
 
   const lines = cleaned
@@ -181,7 +203,7 @@ export type AnswerQuality = {
   reason: "ok" | "code_dump" | "titled_box" | "wikipedia_paragraph" | "generic_ai" | "empty" | "bullet_notes" | "invented";
 };
 
-export function scoreEmployeeAnswer(answer: string, askedForCode = false): AnswerQuality {
+export function scoreEmployeeAnswer(answer: string, askedForCode = false, keepPoints = false): AnswerQuality {
   const text = String(answer || "").trim();
   if (!text) return { ok: false, reason: "empty" };
   if (CATCH_PHRASE.test(text)) return { ok: true, reason: "ok" };
@@ -190,11 +212,11 @@ export function scoreEmployeeAnswer(answer: string, askedForCode = false): Answe
   if (!askedForCode && looksLikeCodeDump(text)) return { ok: false, reason: "code_dump" };
   if (TITLED_BOX.test(text) || ALL_CAPS_TITLE.test(text)) return { ok: false, reason: "titled_box" };
   if (GENERIC_AI.test(text) || EVASIVE.test(text)) return { ok: false, reason: "generic_ai" };
-  if (!askedForCode && looksLikeBulletNotes(text)) return { ok: false, reason: "bullet_notes" };
+  if (!askedForCode && !keepPoints && looksLikeBulletNotes(text)) return { ok: false, reason: "bullet_notes" };
   if (!askedForCode && WIKIPEDIA_OPENER.test(text)) return { ok: false, reason: "wikipedia_paragraph" };
   if (!askedForCode && CASUAL_OPENER.test(text)) return { ok: false, reason: "generic_ai" };
   if (!askedForCode && !SPOKEN_MARKER.test(text)) return { ok: false, reason: "wikipedia_paragraph" };
-  if (!askedForCode && looksThinInterview(text)) return { ok: false, reason: "wikipedia_paragraph" };
-  if (!askedForCode && !STRONG_POINT.test(text)) return { ok: false, reason: "wikipedia_paragraph" };
+  if (!askedForCode && !keepPoints && looksThinInterview(text)) return { ok: false, reason: "wikipedia_paragraph" };
+  if (!askedForCode && !STRONG_POINT.test(text) && !(keepPoints && /•/.test(text))) return { ok: false, reason: "wikipedia_paragraph" };
   return { ok: true, reason: "ok" };
 }

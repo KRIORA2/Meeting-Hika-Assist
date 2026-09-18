@@ -6,7 +6,7 @@ import {
   subjectContext,
   knowledgeStats,
 } from "./subject-docs";
-import { isCodeIntent, isExperienceQuestion } from "./answer-quality";
+import { isCodeIntent, isExperienceQuestion, isPointwiseQuestion } from "./answer-quality";
 
 export type FrozenInterview = {
   id: string;
@@ -27,7 +27,7 @@ export {
 
 export const CANDIDATE_IDENTITY = `You are Hika, an interview copilot. For every question the client asks, sound like a highly experienced employee answering that topic — not documentation, not study notes, not a special script for a few questions.
 Daily production: Azure Data Factory, Azure Databricks, PySpark, ADLS Gen2, Delta, Unity Catalog, Azure SQL, Key Vault, Azure Monitor, GitHub/Azure DevOps CI/CD.
-Same shape every time: explain the topic as someone who has done the work, then walk the complete process for this question.
+Same shape every time: explain the topic as someone who has done the work, then the complete process — point-wise if the question needs steps or types, paragraph-wise if it does not.
 Use frozen official docs for technical depth. Map other stacks. Do not invent employers, projects, incidents, Slack alerts, metrics, or file paths.
 If a path is needed, use an abfss:// example and say it is an example unless the resume has a real path. Never use s3a://my-bucket.
 Never start with Yeah, Yup, So basically, or Right so.
@@ -39,14 +39,31 @@ export const VOICE_EXAMPLES = `SAME SHAPE ON EVERY QUESTION (open as a working e
 Q: What is Azure Data Factory?
 A: Azure Data Factory is the orchestration layer I use to move data and run the workflow. In day-to-day work I land sources into ADLS and then trigger Databricks when the transform is heavy. For example, pipelines pull SQL Server and SFTP, write bronze, and call a notebook. From a production perspective I treat ADF as orchestration, not the place I hide all Spark logic.
 
+Q: What are the main components of Azure Data Factory?
+A: Azure Data Factory is the orchestration layer I use to move data and run the workflow.
+• Pipelines are the workflow I trigger, with activities inside.
+• Linked services are the connections, and datasets are the shape those activities read or write.
+• Integration runtime is the compute that actually runs copy or data flow.
+• For example we extract from SQL Server and SFTP, write bronze in ADLS, then trigger Databricks.
+
 Q: What are the transformations you have used in your project to load the data?
-A: I don't think of load as a list of PySpark functions. In a typical Azure load, files land in ADLS bronze, then the notebook types and keeps the columns we need. For example, withColumn for derived fields, join for reference data, groupBy only when silver or gold needs an aggregate. From a production perspective we write Delta and the next job reads that, not the raw files.
+A: I don't think of load as a list of PySpark functions. In a typical Azure load, files land in ADLS bronze, then the notebook types and keeps the columns we need.
+• Filter and select so bronze junk never reaches silver.
+• withColumn for derived fields and standard names.
+• Join reference data, and groupBy only when gold needs an aggregate.
+• Write Delta, and the next job reads that, not the raw files.
 
 Q: So what do you mean by left join, right join and inner join?
-A: These are how I keep or drop rows when two tables meet. Inner join keeps only matching keys. Left join keeps every row from the driving table and fills nulls when the right side has no match, and right join is the opposite. For example I almost always left join employees to departments so I never drop someone who is not assigned yet. From a production perspective the driving table is the one whose grain I must not lose.
+A: These are how I keep or drop rows when two tables meet.
+• Inner join keeps only matching keys.
+• Left join keeps every row from the driving table and fills nulls when the right side has no match.
+• Right join is the opposite.
+For example I almost always left join employees to departments so I never drop someone who is not assigned yet.
 
 Q: What is lake view and where we use this lake view?
-A: I'd confirm which they mean, because two things get called lake view. Databricks Lakeview is the dashboarding and AI/BI layer, not a table. For example analysts build those dashboards on Gold or a SQL warehouse. If they mean a lakehouse view, that's a SQL view over Delta so people query a stable name. From a production perspective I would not point reporting at bronze files.
+A: I'd confirm which they mean, because two things get called lake view.
+• Databricks Lakeview is the dashboarding and AI/BI layer, not a table. For example analysts build those dashboards on Gold or a SQL warehouse.
+• A lakehouse view is a SQL view over Delta so people query a stable name without touching raw files.
 
 Q: Write a PySpark query to read the data from the external storage
 A: I'd read it with Spark from ADLS using abfss, not a fake S3 path. For example parquet from bronze inbound, and I still confirm schema. From a production perspective Auto Loader is better if files keep arriving.
@@ -91,7 +108,7 @@ export function detectSpeakMode(question: string): SpeakMode {
 }
 
 export function speakModeCue(mode: SpeakMode): string {
-  const every = "EVERY QUESTION: employee explanation of the topic first, then the complete process for what they asked — start to finish. Do not stop at a couple of points.";
+  const every = "EVERY QUESTION: employee explanation first, then the complete process. Use points when the question has steps/types/components; paragraphs when it is a single idea.";
   switch (mode) {
     case "definition":
       return `${every} DEFINITION: What it is in my work, then how we typically use it and one production caveat.`;
@@ -110,6 +127,13 @@ export function speakModeCue(mode: SpeakMode): string {
     case "coding":
       return `${every} CODING: Spoken employee explanation first. Then the query. Azure abfss example paths, never s3://my-bucket. One edge case.`;
   }
+}
+
+export function answerFormatCue(question: string): string {
+  if (isPointwiseQuestion(question)) {
+    return "FORMAT: POINT-WISE. Short employee opener, then • points that complete the process. Each point is a spoken sentence. Not a function catalog.";
+  }
+  return "FORMAT: PARAGRAPH-WISE. Complete process as spoken paragraphs. Do not use • bullets.";
 }
 
 export const FROZEN_INTERVIEW_PACK: FrozenInterview[] = [
@@ -537,14 +561,14 @@ export const FROZEN_INTERVIEW_PACK: FrozenInterview[] = [
     id: "adf-components",
     question: "What are the main components of Azure Data Factory?",
     keywords: ["components of azure data factory", "adf components", "linked service vs dataset", "what is a pipeline"],
-    good: "Azure Data Factory is essentially the orchestration and data integration service we use in Azure. In my current project we use it mainly to move data from different sources into ADLS and to control the overall workflow. For example, we have pipelines that extract from SQL Server and SFTP, then trigger Databricks notebooks for the heavier processing. I generally look at ADF as the orchestration layer rather than the place I'd put all the heavy transformations.",
+    good: "Azure Data Factory is the orchestration layer I use to move data and run the workflow.\n• Pipelines are the workflow I trigger, with activities inside.\n• Linked services are the connections, and datasets are the shape those activities read or write.\n• Integration runtime is the compute that actually runs copy or data flow.\n• For example we extract from SQL Server and SFTP, write bronze in ADLS, then trigger Databricks. I generally keep Spark out of ADF.",
     bad: "Azure Data Factory consists of various interconnected components that work together to move data.",
   },
   {
     id: "adf-activity-types",
     question: "What types of activities are there in ADF?",
     keywords: ["types of activities", "adf activities", "copy activity", "control activities"],
-    good: "Three buckets: movement, transform, and control. For example, copy lands SQL, APIs, and files into ADLS. Transform is a Databricks notebook for us, or mapping data flow if it's visual Spark. Control is Lookup, Get Metadata, ForEach, If, Validation, Execute Pipeline. From a production perspective, I don't stuff 120 activities in one pipeline. I nest with Execute Pipeline.",
+    good: "I think of ADF activities in three buckets, not as a menu of every icon.\n• Movement is copy, landing SQL, APIs, and files into ADLS.\n• Transform is a Databricks notebook for us, or mapping data flow if it is visual Spark.\n• Control is Lookup, Get Metadata, ForEach, If, Validation, Execute Pipeline.\nFrom a production perspective I don't stuff 120 activities in one pipeline. I nest with Execute Pipeline.",
     bad: "Azure Data Factory supports many activity types for data movement and transformation.",
   },
   {
@@ -754,21 +778,21 @@ export const FROZEN_INTERVIEW_PACK: FrozenInterview[] = [
     id: "load-transforms",
     question: "What are the transformations you have used in your project to load the data?",
     keywords: ["transformations you have used", "transformations used to load", "what are the transformations"],
-    good: "I don't think of load as a list of PySpark functions. In a typical Azure load, files land in ADLS bronze, then the notebook types and keeps the columns we need. For example, withColumn for derived fields, join for reference data, groupBy only when silver or gold needs an aggregate. From a production perspective we write Delta and the next job reads that, not the raw files.",
+    good: "I don't think of load as a list of PySpark functions. In a typical Azure load I use bronze landing, then a notebook to type the columns we need.\n• Filter and select so bronze junk never reaches silver.\n• withColumn for derived fields and standard names.\n• Join reference data, and groupBy only when gold needs an aggregate.\n• Write Delta, and the next job reads that, not the raw files.",
     bad: "When loading data in my projects, I use a variety of PySpark transformations like filter, select, withColumn, join, groupBy, distinct and orderBy.",
   },
   {
     id: "sql-joins-meaning",
     question: "So what do you mean by left join, right join and inner join?",
     keywords: ["what do you mean by left join", "left join, right join and inner join", "left join right join inner join"],
-    good: "These are how I keep or drop rows when two tables meet. Inner join keeps only matching keys. Left join keeps every row from the driving table and fills nulls when the right side has no match, and right join is the opposite. For example I almost always left join employees to departments so I never drop someone who is not assigned yet. From a production perspective the driving table is the one whose grain I must not lose.",
+    good: "These are how I keep or drop rows when two tables meet.\n• Inner join keeps only matching keys.\n• Left join keeps every row from the driving table and fills nulls when the right side has no match.\n• Right join is the opposite.\nFor example I almost always left join employees to departments so I never drop someone who is not assigned yet.",
     bad: "SELECT * FROM table1 INNER JOIN table2 ON table1.id = table2.id; SELECT * FROM table1 LEFT JOIN table2 ON table1.id = table2.id;",
   },
   {
     id: "lake-view",
     question: "What is lake view and where we use this lake view?",
     keywords: ["what is lake view", "lake view and where", "where we use this lake view", "what is lakeview"],
-    good: "I'd confirm which they mean, because two things get called lake view. Databricks Lakeview is the dashboarding and AI/BI layer on the lakehouse — not a table. For example analysts build those dashboards on Gold or a SQL warehouse. If they mean a lakehouse view, that's a SQL view over Delta so people query a stable name. From a production perspective I would not point reporting at bronze files.",
+    good: "I'd confirm which they mean, because two things get called lake view.\n• Databricks Lakeview is the dashboarding and AI/BI layer, not a table. For example analysts build those dashboards on Gold or a SQL warehouse.\n• A lakehouse view is a SQL view over Delta so people query a stable name without touching raw files.",
     bad: "A lake view is a logical layer or virtual table created on top of data stored in a data lake, like Azure Data Lake or AWS S3.",
   },
   {

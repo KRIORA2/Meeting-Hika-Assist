@@ -834,6 +834,8 @@ function PiPContent({
   const systemAnalyserRef = useRef<AnalyserNode | null>(null);
   const meterFrameRef = useRef<number | null>(null);
   const recorderRef = useRef<MediaRecorder | null>(null);
+  const speechRecRef = useRef<{ abort: () => void; stop: () => void; onend: (() => void) | null } | null>(null);
+  const speechFinalRef = useRef("");
   const allChunksRef = useRef<Blob[]>([]);       // accumulated raw audio for this recording
   const interimBusyRef = useRef(false);             // prevent overlapping interim API calls
   const recordTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -1015,7 +1017,7 @@ function PiPContent({
       sessionMode === "interview"
         ? "Interview: answer as the candidate, first person, like a real senior data engineer speaking on the call."
         : "Meeting: answer as this person talking to teammates. Decisive, current, first person.",
-      "Every question: same shape — explain the topic as a working employee first, then the complete process they asked about. No bullets. Queries get that spoken process plus real SQL.",
+      "Every question: employee opener first. POINT-WISE if they asked for steps, types, or components. PARAGRAPH-WISE if it is one idea. Queries get that spoken process plus real SQL.",
     ].filter(Boolean).join("\n");
 
     const ctx = utterance
@@ -1070,28 +1072,10 @@ function PiPContent({
       };
       persistInsight(insight);
       setSelectedHistoryId(null);
-
-      const withHistory = (next: Insight) => (prev: Insight[]) =>
-        [next, ...prev.filter((item) => item.id !== next.id && item.answer !== "Preparing the best response from live context…")].slice(0, 20);
-
-      const words = answer.split(/(\s+)/).filter((w: string) => w.length > 0);
-      if (words.length < 60) {
-        setInsights(withHistory(insight));
-        setAnswerReady(true);
-      } else {
-        let cursor = 0;
-        revealTimerRef.current = setInterval(() => {
-          cursor = Math.min(words.length, cursor + 6);
-          const partial = words.slice(0, cursor).join("");
-          setInsights(withHistory({ ...insight, answer: partial }));
-          if (cursor >= words.length && revealTimerRef.current) {
-            clearInterval(revealTimerRef.current);
-            revealTimerRef.current = null;
-            setInsights(withHistory(insight));
-            setAnswerReady(true);
-          }
-        }, 20);
-      }
+      setInsights((prev) =>
+        [insight, ...prev.filter((item) => item.id !== insight.id && item.answer !== "Preparing the best response from live context…")].slice(0, 20),
+      );
+      setAnswerReady(true);
     } catch (error) {
       if (question) setManualQ(question);
       setMicError(error instanceof Error ? error.message : "Hikanest could not generate an answer. Please try again.");
@@ -1388,29 +1372,77 @@ function PiPContent({
   //     commits the chunk, clears liveTranscript, then immediately fires
   //     analysis — no setTimeout, no wait.
 
+  const stopLiveSpeech = useCallback(() => {
+    const rec = speechRecRef.current;
+    speechRecRef.current = null;
+    if (!rec) return;
+    rec.onend = null;
+    try { rec.abort(); } catch {
+      try { rec.stop(); } catch { /* ignore */ }
+    }
+  }, []);
+
+  const startLiveSpeech = useCallback(() => {
+    const Rec = (window as Window & { SpeechRecognition?: new () => any; webkitSpeechRecognition?: new () => any }).SpeechRecognition
+      || (window as Window & { webkitSpeechRecognition?: new () => any }).webkitSpeechRecognition;
+    stopLiveSpeech();
+    speechFinalRef.current = "";
+    if (!Rec) return false;
+    const rec = new Rec();
+    rec.continuous = true;
+    rec.interimResults = true;
+    rec.lang = "en-US";
+    rec.maxAlternatives = 1;
+    rec.onresult = (event: { resultIndex: number; results: ArrayLike<{ isFinal: boolean; 0?: { transcript?: string } }> }) => {
+      if (!micActiveRef.current) return;
+      let interim = "";
+      for (let index = event.resultIndex; index < event.results.length; index += 1) {
+        const piece = String(event.results[index][0]?.transcript || "").replace(/\s+/g, " ").trim();
+        if (!piece) continue;
+        if (event.results[index].isFinal) {
+          const current = speechFinalRef.current;
+          speechFinalRef.current = !current ? piece : piece.startsWith(current) ? piece : `${current} ${piece}`.replace(/\s+/g, " ").trim();
+        } else {
+          interim += `${piece} `;
+        }
+      }
+      const shown = [speechFinalRef.current, interim].filter(Boolean).join(" ").replace(/\s+/g, " ").trim();
+      if (!shown) return;
+      liveTranscriptRef.current = shown;
+      setLiveTranscript(shown);
+    };
+    rec.onend = () => {
+      if (!micActiveRef.current || speechRecRef.current !== rec) return;
+      try { rec.start(); } catch { /* ignore */ }
+    };
+    try {
+      rec.start();
+      speechRecRef.current = rec;
+      return true;
+    } catch {
+      speechRecRef.current = null;
+      return false;
+    }
+  }, [stopLiveSpeech]);
+
   const doInterimTranscription = useCallback(async (blob: Blob, mimeType: string) => {
-    if (interimBusyRef.current) return;
+    if (interimBusyRef.current || liveTranscriptRef.current) return;
     interimBusyRef.current = true;
     try {
       const base64 = await blobToBase64(blob);
       const result = await transcribeAudio.mutateAsync({ data: { audioBase64: base64, mimeType } });
       const text = result.transcript?.trim() ?? "";
-      if (micActiveRef.current && text) {
-        const previous = liveTranscriptRef.current ?? "";
-        const merged = previous
-          ? `${previous} ${text}`.trim()
-          : text;
-
-        liveTranscriptRef.current = merged;
-        setLiveTranscript(merged);
-
+      if (micActiveRef.current && text && !liveTranscriptRef.current) {
+        liveTranscriptRef.current = text;
+        setLiveTranscript(text);
       }
     } catch { /* interim errors are silent */ }
     finally { interimBusyRef.current = false; }
-  }, [transcribeAudio, runAnalysis]);
+  }, [transcribeAudio]);
 
   const stopMicRecording = useCallback(() => {
     if (!micActiveRef.current && !recorderRef.current) return;
+    stopLiveSpeech();
     if (realtimePeerRef.current?.connectionState === "connected" && realtimeDataRef.current?.readyState === "open") {
       micActiveRef.current = false;
       setMicActive(false);
@@ -1432,7 +1464,7 @@ function PiPContent({
       setMicActive(false);
       setLiveTranscript(null);
     }
-  }, [stopRealtimeStreaming]);
+  }, [stopRealtimeStreaming, stopLiveSpeech]);
 
   const computeRmsLevel = useCallback((analyser: AnalyserNode | null): number => {
     if (!analyser) return 0;
@@ -1561,12 +1593,13 @@ function PiPContent({
   const startMicRecording = useCallback(async () => {
     if (micActiveRef.current) return;
     setMicError(null);
+    micActiveRef.current = true;
+    setMicActive(true);
+    liveTranscriptRef.current = null;
+    setLiveTranscript(null);
+    startLiveSpeech();
     try {
       const fallbackMicStream = await getOrCreateMicStream();
-      const stream = await buildRecordingStream();
-      if (!stream || stream.getAudioTracks().length === 0) {
-        throw new Error("No microphone audio stream available");
-      }
       const mimeType = MediaRecorder.isTypeSupported("audio/webm;codecs=opus") ? "audio/webm;codecs=opus"
         : MediaRecorder.isTypeSupported("audio/webm") ? "audio/webm"
           : "audio/ogg;codecs=opus";
@@ -1576,47 +1609,43 @@ function PiPContent({
       lastAnalyzedTextRef.current = "";
       lastDispatchedAtRef.current = 0;
       lastDispatchedQuestionRef.current = "";
-
-      // Prefer an always-open Realtime connection. Its VAD finalizes turns
-      // after a short pause and streams text deltas without re-uploading audio.
-      if (!forceHttpFallbackRef.current && await startRealtimeStreaming(stream)) {
-        micActiveRef.current = true;
-        setMicActive(true);
-        return;
-      }
       realtimeFallbackRef.current = true;
       setVoiceStatus("fallback");
 
       const recorder = new MediaRecorder(fallbackMicStream, { mimeType });
       recorderRef.current = recorder;
+      const speechOn = Boolean(speechRecRef.current);
 
       recorder.ondataavailable = (e) => {
         if (!e.data?.size) return;
-
-        // Keep every chunk only for the final transcript.
         allChunksRef.current.push(e.data);
-
-        // Send ONLY the newest chunk for live transcription.
-        if (!micActiveRef.current) return;
-
-        // Build a complete WebM containing all chunks
-        const blob = new Blob(allChunksRef.current, {
-          type: mimeType,
-        });
-
-        // Don't send tiny blobs
-        if (blob.size < 15000) return;
-
-        doInterimTranscription(blob, mimeType);
+        if (!micActiveRef.current || speechOn || liveTranscriptRef.current) return;
+        if (e.data.size < 900) return;
+        doInterimTranscription(e.data, mimeType);
       };
 
       recorder.onstop = async () => {
         micActiveRef.current = false;
         recorderRef.current = null;
         setMicActive(false);
+        stopLiveSpeech();
 
+        const live = (liveTranscriptRef.current || "").replace(/\s+/g, " ").trim();
         liveTranscriptRef.current = null;
-        setLiveTranscript(null); // clear live preview immediately
+        setLiveTranscript(null);
+
+        if (live.split(/\s+/).filter(Boolean).length >= 6) {
+          const updated = transcriptRef.current ? `${transcriptRef.current} ${live}` : live;
+          transcriptRef.current = updated;
+          setChunks((prev) => [...prev, {
+            id: crypto.randomUUID(),
+            text: live,
+            timestamp: new Date(),
+            isQuestion: looksLikeQuestion(live),
+          }]);
+          runAnalysis({ utterance: live });
+          return;
+        }
 
         const blob = new Blob(allChunksRef.current, { type: mimeType });
         if (blob.size < 500) return;
@@ -1640,35 +1669,30 @@ function PiPContent({
           }
         } catch (err) {
           console.error("TRANSCRIBE ERROR:", err);
-
-          if (err instanceof Error) {
-            console.error(err.message);
-          }
-
           setMicError("Transcription failed — please try again.");
         } finally {
           setIsTranscribing(false);
         }
-
-      }; // <-- THIS closes recorder.onstop
+      };
 
       recorder.onerror = () => {
         setMicError("Recording error — please try again.");
         micActiveRef.current = false;
         setMicActive(false);
         setLiveTranscript(null);
+        stopLiveSpeech();
       };
 
-      // 1 s timeslice — live preview updates every second
-      recorder.start(1000);
-      micActiveRef.current = true;
-      setMicActive(true);
+      recorder.start(speechOn ? 1000 : 400);
     } catch (err) {
       const denied = err instanceof DOMException && (err.name === "NotAllowedError" || err.name === "PermissionDeniedError");
       setMicError(denied ? "Microphone access denied — allow mic permission in your browser settings." : "Could not access microphone or meeting audio.");
+      micActiveRef.current = false;
+      setMicActive(false);
+      stopLiveSpeech();
       stopAuxAudioCapture();
     }
-  }, [buildRecordingStream, doInterimTranscription, transcribeAudio, runAnalysis, startRealtimeStreaming, stopAuxAudioCapture]);
+  }, [doInterimTranscription, getOrCreateMicStream, transcribeAudio, runAnalysis, startLiveSpeech, stopLiveSpeech, stopAuxAudioCapture]);
 
   const toggleMic = useCallback(() => {
     if (micActiveRef.current) stopMicRecording(); else startMicRecording();
@@ -1692,6 +1716,7 @@ function PiPContent({
   // ── Session ───────────────────────────────────────────────────────────────
 
   const releaseMicStream = useCallback(() => {
+    stopLiveSpeech();
     stopRealtimeStreaming();
     if (recorderRef.current?.state === "recording") recorderRef.current.stop();
     recorderRef.current = null;
@@ -1702,7 +1727,7 @@ function PiPContent({
     setMicActive(false);
     setLiveTranscript(null);
     setVoiceStatus("disconnected");
-  }, [stopAuxAudioCapture, stopRealtimeStreaming]);
+  }, [stopAuxAudioCapture, stopRealtimeStreaming, stopLiveSpeech]);
 
   const startSession = useCallback(async (mode?: SessionMode) => {
     const chosenMode = mode ?? sessionMode;

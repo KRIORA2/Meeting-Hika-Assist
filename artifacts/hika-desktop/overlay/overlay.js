@@ -83,6 +83,10 @@ let mixSources = [];
 let meterStreams = [];
 let micCapture = null;
 let meetingCapture = null;
+let warmPipelinePromise = null;
+let liveSpeech = null;
+let liveSpeechFinal = "";
+let liveSpeechActive = false;
 
 function markRealtimeMetric(name) {
   const now = performance.now();
@@ -211,6 +215,14 @@ async function init() {
     selectedDeviceId = micSource.value || "meeting";
     persistMicDevice(selectedDeviceId);
     setListeningUI(isRecording);
+    if (!isRecording) {
+      warmPipelinePromise = null;
+      if (micStream) {
+        micStream.getTracks().forEach((track) => track.stop());
+        micStream = null;
+      }
+      void warmAudioPipeline().catch(() => {});
+    }
   });
   navigator.mediaDevices?.addEventListener?.("devicechange", () => {
     if (!isRecording) void loadMicSources();
@@ -518,6 +530,11 @@ function looksLikeUsEnglish(text) {
   return true;
 }
 
+function isReadyQuestion(text) {
+  const value = String(text || "").replace(/\s+/g, " ").trim();
+  return value.split(/\s+/).filter(Boolean).length >= 6 && looksLikeUsEnglish(value) && !isHallucinatedTranscript(value);
+}
+
 function isHallucinatedTranscript(text) {
   const value = String(text || "").replace(/\s+/g, " ").trim();
   if (!value) return true;
@@ -562,6 +579,68 @@ function appendCapturedTranscript(existing, incoming) {
   if (current.endsWith(next)) return current;
   if (next.startsWith(current) && next.length > current.length) return next;
   return `${current} ${next}`.replace(/\s+/g, " ").trim();
+}
+
+function startLiveSpeech() {
+  const Rec = window.SpeechRecognition || window.webkitSpeechRecognition;
+  stopLiveSpeech();
+  liveSpeechFinal = "";
+  liveSpeechActive = false;
+  if (!Rec) return false;
+  const rec = new Rec();
+  rec.continuous = true;
+  rec.interimResults = true;
+  rec.lang = "en-US";
+  rec.maxAlternatives = 1;
+  rec.onresult = (event) => {
+    if (!isRecording) return;
+    let interim = "";
+    for (let index = event.resultIndex; index < event.results.length; index += 1) {
+      const piece = String(event.results[index][0]?.transcript || "").replace(/\s+/g, " ").trim();
+      if (!piece) continue;
+      if (event.results[index].isFinal) {
+        if (!liveSpeechFinal) liveSpeechFinal = piece;
+        else if (piece.startsWith(liveSpeechFinal)) liveSpeechFinal = piece;
+        else if (!liveSpeechFinal.endsWith(piece)) liveSpeechFinal = `${liveSpeechFinal} ${piece}`.replace(/\s+/g, " ").trim();
+      } else {
+        interim += `${piece} `;
+      }
+    }
+    const shown = [liveSpeechFinal, interim].filter(Boolean).join(" ").replace(/\s+/g, " ").trim();
+    if (!shown) return;
+    setTranscriptDraft(shown);
+    setLiveBadge("● LIVE", "live");
+  };
+  rec.onerror = (event) => {
+    if (event?.error === "not-allowed" || event?.error === "service-not-allowed") liveSpeechActive = false;
+  };
+  rec.onend = () => {
+    if (!isRecording || liveSpeech !== rec) return;
+    try { rec.start(); } catch { liveSpeechActive = false; }
+  };
+  try {
+    rec.start();
+    liveSpeech = rec;
+    liveSpeechActive = true;
+    return true;
+  } catch {
+    liveSpeech = null;
+    liveSpeechActive = false;
+    return false;
+  }
+}
+
+function stopLiveSpeech() {
+  const rec = liveSpeech;
+  liveSpeech = null;
+  liveSpeechActive = false;
+  if (!rec) return;
+  rec.onresult = null;
+  rec.onerror = null;
+  rec.onend = null;
+  try { rec.abort(); } catch {
+    try { rec.stop(); } catch { /* ignore */ }
+  }
 }
 
 async function loadMicSources() {
@@ -877,7 +956,7 @@ async function handleStart() {
   const jobContext = (jobPostUrl?.value || "").trim();
   const languageContext = "Write the transcript and every answer in US English with American spelling. Never use Hindi or any other language.";
   sessionGuidance = [
-    "Same answer shape for every question: explain the topic as a real working employee first, then walk the complete process they asked about. No Yeah. No • bullets unless they asked for a list.",
+    "Same answer shape every question: open as a real working employee, then POINT-WISE if they asked for steps/types/components, PARAGRAPH-WISE if they asked for one idea. No Yeah.",
     "Every question — technical, scenario, access, behavioral, definition — first person, how I actually do this at work, then production points.",
     "No headings, no textbook dump, no REST/SCIM/placeholder Python unless they asked for that script.",
     "If they asked for a query or script: employee explanation first, then full real production SQL/PySpark.",
@@ -950,6 +1029,7 @@ function stopCaptureImmediate() {
   clearInterval(chunkTimer);
   chunkTimer = null;
   stopRealtimeVoice(true);
+  stopLiveSpeech();
   discardSourceRecorder(micCapture);
   discardSourceRecorder(meetingCapture);
   micCapture = null;
@@ -1063,12 +1143,12 @@ function createSourceRecorder(stream, sourceId) {
   const chunks = [];
   recorder.ondataavailable = (event) => {
     if (event.data && event.data.size > 0) chunks.push(event.data);
-    if (isRecording && event.data && event.data.size >= 900) {
-      void ingestLiveSlice(event.data, sourceId);
-    }
+    if (!isRecording || !event.data || event.data.size < 600) return;
+    if (liveSpeechActive && String(liveTxText.value || "").trim()) return;
+    void ingestLiveSlice(event.data, sourceId);
   };
   try {
-    recorder.start(2000);
+    recorder.start(liveSpeechActive ? 1000 : 400);
   } catch {
     recorder.start();
   }
@@ -1104,6 +1184,7 @@ function stopSourceRecorder(handle) {
       return;
     }
     handle.recorder.onstop = finish;
+    try { handle.recorder.requestData?.(); } catch { /* ignore */ }
     try { handle.recorder.stop(); } catch { finish(); }
   });
 }
@@ -1133,10 +1214,24 @@ async function startRecording() {
       clearTimeout(listenFinalizeTimer);
       listenFinalizeTimer = null;
     }
-    statusDot.textContent = "● Connecting microphone";
-    const sources = await buildRecordingStream();
+    isRecording = true;
+    setListeningUI(true);
+    recIndicator.hidden = false;
+    liveTxEl.style.display = "flex";
+    setTranscriptDraft("");
+    micTranscriptText = "";
+    latestUtterance = "";
+    transcriptReadyForAsk = false;
+    statusDot.textContent = "● Listening";
+    statusDot.className = "status-dot rec";
+    setLiveBadge("● LIVE", "live");
+    startLiveSpeech();
+
+    const sources = await warmAudioPipeline();
+    if (!liveSpeechActive) startLiveSpeech();
     if (epoch !== sessionEpoch || sessionEnding || !sessionId) {
-      stopAudioPipeline();
+      stopLiveSpeech();
+      isRecording = false;
       setListeningUI(false);
       return;
     }
@@ -1146,25 +1241,16 @@ async function startRecording() {
     warnedSilentMic = false;
     silentListenFrames = 0;
     const captureName = sources.meeting && sources.mic ? "meeting or mic" : (sources.mic ? "your mic" : "meeting");
-
-    isRecording = true;
-    setListeningUI(true);
-    recIndicator.hidden = false;
     statusDot.textContent = `● Listening · ${captureName}`;
-    statusDot.className = "status-dot rec";
-    liveTxEl.style.display = "flex";
-    setTranscriptDraft("");
-    micTranscriptText = "";
-    latestUtterance = "";
-    transcriptReadyForAsk = false;
     setLiveBadge(`● LIVE · ${captureName}`, "live");
   } catch (err) {
     const message = err instanceof Error ? err.message : "Audio capture failed.";
     alert(`Could not start listening.\n\n${message}\n\nAllow the microphone. Speak a full English question, then Stop.`);
     statusDot.textContent = "● Mic unavailable";
     statusDot.className = "status-dot";
+    stopLiveSpeech();
+    isRecording = false;
     setListeningUI(false);
-    stopAudioPipeline();
     console.error(err);
   }
 }
@@ -1177,14 +1263,16 @@ async function stopRecording() {
   pendingAnalyzeOnStop = true;
   setListeningUI(false);
   const preview = (liveTxText.value || "").replace(/\s+/g, " ").trim();
-  if (preview) {
-    statusDot.textContent = "● Captured";
-    setLiveBadge("Captured", "captured");
+  const previewReady = isReadyQuestion(preview);
+  if (previewReady) {
+    statusDot.textContent = "⚡ Answering";
+    setLiveBadge("Answering", "answering");
   } else {
     statusDot.textContent = "● Transcribing";
     setLiveBadge("Transcribing", "captured");
   }
 
+  stopLiveSpeech();
   stopRealtimeVoice(true);
   const generation = captureGeneration;
   const epoch = sessionEpoch;
@@ -1192,18 +1280,21 @@ async function stopRecording() {
   const meetingHandle = meetingCapture;
   micCapture = null;
   meetingCapture = null;
-  const [micBlob, meetingBlob] = await Promise.all([
+  const blobsPromise = Promise.all([
     stopSourceRecorder(micHandle),
     stopSourceRecorder(meetingHandle),
   ]);
-  stopAudioPipeline();
-  if (sessionEnding || generation !== captureGeneration || epoch !== sessionEpoch) return;
 
-  await waitForTranscriptionIdle(4000);
-  if (preview && looksLikeUsEnglish(preview) && preview.split(/\s+/).length >= 6) {
-    await finishListenAndAnswer(preview);
+  if (previewReady) {
+    void finishListenAndAnswer(preview);
+    void blobsPromise;
     return;
   }
+
+  const [micBlob, meetingBlob] = await blobsPromise;
+  if (sessionEnding || generation !== captureGeneration || epoch !== sessionEpoch) return;
+
+  await waitForTranscriptionIdle(400);
   const preferMic = listenMicPeak >= listenMeetingPeak;
   const primary = preferMic ? micBlob : meetingBlob;
   const secondary = preferMic ? meetingBlob : micBlob;
@@ -1603,6 +1694,7 @@ async function captureSpeakerMix() {
 }
 
 async function getMicStream() {
+  if (hasLiveAudio(micStream)) return micStream;
   if (micStream) {
     micStream.getTracks().forEach((track) => track.stop());
     micStream = null;
@@ -1633,7 +1725,10 @@ async function getMicStream() {
       }
       track.enabled = true;
       track.onended = () => {
-        if (micStream === stream) micStream = null;
+        if (micStream === stream) {
+          micStream = null;
+          warmPipelinePromise = null;
+        }
       };
       micStream = stream;
       return micStream;
@@ -1646,8 +1741,7 @@ async function getMicStream() {
 
 async function ensureMicPermission() {
   try {
-    const probe = await navigator.mediaDevices.getUserMedia({ audio: true });
-    probe.getTracks().forEach((track) => track.stop());
+    await warmAudioPipeline();
     if (statusDot && !isRecording) statusDot.textContent = "● Mic ready";
   } catch {
     if (statusDot) statusDot.textContent = "● Allow mic";
@@ -1656,18 +1750,22 @@ async function ensureMicPermission() {
 }
 
 async function getMeetingAudioStream() {
+  if (hasLiveAudio(systemStream)) return systemStream;
   if (systemStream) {
     systemStream.getTracks().forEach((track) => track.stop());
     systemStream = null;
   }
 
-  const stream = await captureDesktopLoopback() || await captureDisplayLoopback();
+  const stream = await captureDesktopLoopback();
   if (!stream || !hasLiveAudio(stream)) return null;
 
   const track = stream.getAudioTracks()[0];
   track.enabled = true;
   track.onended = () => {
-    if (systemStream === stream) systemStream = null;
+    if (systemStream === stream) {
+      systemStream = null;
+      warmPipelinePromise = null;
+    }
   };
   systemStream = stream;
   return stream;
@@ -1690,36 +1788,52 @@ function connectMeter(stream, analyserTarget) {
   return analyser;
 }
 
-async function buildRecordingStream() {
-  const meeting = await getMeetingAudioStream().catch(() => null);
-  const mic = await getMicStream().catch(() => null);
-  if (!hasLiveAudio(meeting) && !hasLiveAudio(mic)) {
-    throw new Error("Allow the microphone so Hikanest can hear you or the meeting.");
+async function warmAudioPipeline() {
+  if ((hasLiveAudio(micStream) || hasLiveAudio(systemStream)) && audioContext && audioContext.state !== "closed") {
+    if (audioContext.state === "suspended") await audioContext.resume();
+    if (!meterFrame) startMeters();
+    return { meeting: systemStream, mic: micStream };
   }
+  if (warmPipelinePromise) return warmPipelinePromise;
+  warmPipelinePromise = (async () => {
+    const [meeting, mic] = await Promise.all([
+      getMeetingAudioStream().catch(() => null),
+      getMicStream().catch(() => null),
+    ]);
+    if (!hasLiveAudio(meeting) && !hasLiveAudio(mic)) {
+      throw new Error("Allow the microphone so Hikanest can hear you or the meeting.");
+    }
+    const Ctx = window.AudioContext || window.webkitAudioContext;
+    if (!audioContext || audioContext.state === "closed") audioContext = new Ctx();
+    if (audioContext.state === "suspended") await audioContext.resume();
 
-  const Ctx = window.AudioContext || window.webkitAudioContext;
-  if (!audioContext || audioContext.state === "closed") audioContext = new Ctx();
-  if (audioContext.state === "suspended") await audioContext.resume();
+    mixSources.forEach((source) => {
+      try { source.disconnect(); } catch { /* already disconnected */ }
+    });
+    mixSources = [];
+    meterStreams.forEach((stream) => stream.getTracks().forEach((track) => track.stop()));
+    meterStreams = [];
+    if (meterCaptureStream) {
+      meterCaptureStream.getTracks().forEach((track) => track.stop());
+      meterCaptureStream = null;
+    }
 
-  mixSources.forEach((source) => {
-    try { source.disconnect(); } catch { /* already disconnected */ }
+    connectMeter(mic, "mic");
+    connectMeter(meeting, "client");
+    if (!micAnalyser) micAnalyser = clientAnalyser;
+    if (!clientAnalyser) clientAnalyser = micAnalyser;
+    mixedStream = mic || meeting;
+    startMeters();
+    return { meeting, mic };
+  })().catch((err) => {
+    warmPipelinePromise = null;
+    throw err;
   });
-  mixSources = [];
-  meterStreams.forEach((stream) => stream.getTracks().forEach((track) => track.stop()));
-  meterStreams = [];
-  if (meterCaptureStream) {
-    meterCaptureStream.getTracks().forEach((track) => track.stop());
-    meterCaptureStream = null;
-  }
+  return warmPipelinePromise;
+}
 
-  connectMeter(mic, "mic");
-  connectMeter(meeting, "client");
-  if (!micAnalyser) micAnalyser = clientAnalyser;
-  if (!clientAnalyser) clientAnalyser = micAnalyser;
-
-  mixedStream = mic || meeting;
-  startMeters();
-  return { meeting, mic };
+async function buildRecordingStream() {
+  return warmAudioPipeline();
 }
 
 function stopAudioPipeline() {
@@ -1754,11 +1868,12 @@ function stopAudioPipeline() {
     audioContext.close().catch(() => {});
     audioContext = null;
   }
+  warmPipelinePromise = null;
 }
 
 // ── Transcription ─────────────────────────────────────────────────────────────
 async function transcribeBlob(blob, { preview = false } = {}) {
-  if (!preview) await waitForTranscriptionIdle(6000);
+  if (!preview && isTranscribing) await waitForTranscriptionIdle(400);
   else if (isTranscribing) return "";
   isTranscribing = true;
 
@@ -1803,22 +1918,44 @@ async function analyze(utterance) {
     sessionGuidance ? `Session guidance: ${sessionGuidance}` : "",
     codeRequest
       ? "They asked for a query or script. Employee explanation first, then complete production code. Use abfss example paths, never s3://my-bucket."
-      : "Same shape every question: real-employee explanation of the topic first, then the complete process they asked about. No bullets. Do not invent employers, incidents, or file paths.",
+      : "Same shape every question: real-employee opener, then POINT-WISE for steps/types/components or PARAGRAPH-WISE for one idea. Do not invent employers, incidents, or file paths.",
     `Timestamp: ${new Date().toISOString()}`,
   ].filter(Boolean).join("\n");
+  const body = {
+    transcript: context,
+    sessionId,
+    screenshotBase64: screenshotBase64 || undefined,
+    uploadedDocs: uploadedDocs.slice(0, 3).map(d => ({ id: d.id, name: d.name })),
+    model: selectedModel,
+    mode: selectedSessionMode === "call" ? "meeting" : "interview",
+    stream: true,
+    history: insights.slice(0, 4).reverse().flatMap(item => [
+      { role: "user", content: String(item.question || "").slice(0, 240) },
+      { role: "assistant", content: String(item.answer || "").slice(0, 180) },
+    ]),
+  };
+
+  const paintInsight = (insight, done = false) => {
+    const next = {
+      question: insight.question || utterance,
+      answer: insight.answer || "",
+      confidence: insight.confidence || (done ? "medium" : "medium"),
+      suggestions: insight.suggestions || [],
+      sections: insight.sections || [],
+      keyPoints: insight.keyPoints || [],
+      timestamp: insights[0]?.partial ? insights[0].timestamp : new Date(),
+      partial: !done,
+    };
+    if (insights[0]?.partial) insights[0] = next;
+    else insights = [next, ...insights].slice(0, 20);
+    selectedHistoryInsight = null;
+    renderInsights();
+  };
 
   try {
-    let result = await api("POST", "/api/openai/analyze", {
-      transcript: context,
-      sessionId,
-      screenshotBase64: screenshotBase64 || undefined,
-      uploadedDocs: uploadedDocs.slice(0, 3).map(d => ({ id: d.id, name: d.name })),
-      model: selectedModel,
-      mode: selectedSessionMode === "call" ? "meeting" : "interview",
-      history: insights.slice(0, 4).reverse().flatMap(item => [
-        { role: "user", content: String(item.question || "").slice(0, 240) },
-        { role: "assistant", content: String(item.answer || "").slice(0, 180) },
-      ]),
+    const result = await analyzeStreaming(body, (partial) => {
+      if (sessionEnding || !sessionId || epoch !== sessionEpoch) return;
+      paintInsight(partial, false);
     });
     if (!result) return false;
     if (sessionEnding || !sessionId || epoch !== sessionEpoch) return false;
@@ -1830,21 +1967,14 @@ async function analyze(utterance) {
       suggestions: result.suggestions || [],
       sections:    result.sections   || [],
       keyPoints:   result.keyPoints  || [],
-      timestamp:   new Date(),
     };
-
-    try {
-      await api("POST", "/api/insights", {
-        sessionId,
-        question:   insight.question,
-        answer:     insight.answer,
-        confidence: insight.confidence,
-      });
-    } catch {}
-
-    insights = [insight, ...insights].slice(0, 20);
-    selectedHistoryInsight = null;
-    renderInsights();
+    paintInsight(insight, true);
+    void api("POST", "/api/insights", {
+      sessionId,
+      question:   insight.question,
+      answer:     insight.answer,
+      confidence: insight.confidence,
+    }).catch(() => {});
     if (typeof result.credits === "number") setCredits(result.credits);
     else void refreshCredits();
     return true;
@@ -1856,6 +1986,56 @@ async function analyze(utterance) {
     isAnalyzing = false;
     setAnalyzing(false);
   }
+}
+
+async function analyzeStreaming(body, onDelta) {
+  const opts = { method: "POST", headers: new Headers({ "Content-Type": "application/json", Accept: "application/x-ndjson" }) };
+  if (authToken) opts.headers.set("Authorization", `Bearer ${authToken}`);
+  opts.body = JSON.stringify(body);
+  const res = await fetch(apiUrl + "/api/openai/analyze", opts);
+  if (!res.ok) {
+    const payload = await res.json().catch(() => null);
+    const error = new Error(typeof payload?.error === "string" ? payload.error : `Request failed (${res.status})`);
+    error.status = res.status;
+    if (res.status === 402) {
+      if (typeof payload?.credits === "number") setCredits(payload.credits);
+      showOutOfCredits();
+    }
+    throw error;
+  }
+  if (!res.body) return null;
+  const contentType = res.headers.get("content-type") || "";
+  if (!contentType.includes("ndjson")) {
+    return contentType.includes("json") ? res.json() : null;
+  }
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let donePayload = null;
+  while (true) {
+    const { value, done } = await reader.read();
+    buffer += decoder.decode(value || new Uint8Array(), { stream: !done });
+    const lines = buffer.split("\n");
+    buffer = lines.pop() || "";
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+      let event;
+      try { event = JSON.parse(trimmed); } catch { continue; }
+      if (event.type === "delta") onDelta?.(event);
+      else if (event.type === "done") donePayload = event;
+      else if (event.type === "error") throw new Error(event.error || "Analyze failed");
+    }
+    if (done) break;
+  }
+  if (buffer.trim()) {
+    try {
+      const event = JSON.parse(buffer.trim());
+      if (event.type === "done") donePayload = event;
+      else if (event.type === "delta") onDelta?.(event);
+    } catch { /* ignore trailing junk */ }
+  }
+  return donePayload;
 }
 
 async function handleManualAsk() {
@@ -2054,23 +2234,22 @@ function toSpokenAnswer(text) {
     .replace(/^\s*[A-Z][A-Z0-9 /,&:\-]{10,}\s*$/gm, "")
     .replace(/\*\*/g, "")
     .trim();
-
-  const lines = cleaned
-    .split(/\n+/)
-    .flatMap((line) => line.split("•"))
-    .map((line) => line.replace(/^\s*(?:[-*]|•)\s+/, "").replace(/\s+/g, " ").trim())
-    .filter(Boolean)
-    .map((line) => line.replace(/^(yeah[,.]?\s+|so basically[,.]?\s+|right,? so[,.]?\s+)/i, "").trim())
-    .filter(Boolean);
-
-  if (!lines.length) return "";
-  if (lines.length === 1) return lines[0];
-  if (!/•|^\s*[-*]\s+\S/m.test(cleaned)) {
-    return lines.join("\n\n");
+  if (!cleaned) return "";
+  const keepPoints = /•|^\s*[-*]\s+\S|^\s*\d+[.)]\s+\S/m.test(cleaned);
+  if (!keepPoints) return cleaned.replace(/\n{3,}/g, "\n\n").trim();
+  const rawLines = cleaned.split(/\n+/).map((line) => line.replace(/^(yeah[,.]?\s+|so basically[,.]?\s+|right,? so[,.]?\s+)/i, "").trim()).filter(Boolean);
+  const opener = [];
+  const points = [];
+  for (const line of rawLines) {
+    const isPoint = /^\s*(?:[-*]|•|\d+[.)])\s+/.test(line);
+    const point = line.replace(/^\s*(?:[-*]|•|\d+[.)])\s+/, "").replace(/\s+/g, " ").trim();
+    if (!point) continue;
+    if (isPoint || points.length) points.push(point);
+    else opener.push(point);
   }
-  const rest = lines.slice(1).map((line) => /[.!?]$/.test(line) ? line : `${line}.`);
-  const opener = /[.!?]$/.test(lines[0]) ? lines[0] : `${lines[0]}.`;
-  return [opener, ...rest].join(" ").replace(/\s+/g, " ").trim();
+  const head = opener.join(" ").replace(/\s+/g, " ").trim();
+  if (!points.length) return head;
+  return [head, ...points.map((point) => `• ${point}`)].filter(Boolean).join("\n");
 }
 
 function toParakeetScript(text) {
@@ -2097,11 +2276,27 @@ function collectKeyPoints(ins, spoken) {
 
 function splitSpoken(spoken) {
   const text = String(spoken || "").trim();
+  const lines = text.split(/\n+/).map((line) => line.trim()).filter(Boolean);
+  const opener = [];
+  const points = [];
+  const rest = [];
+  let seenPoint = false;
+  for (const line of lines) {
+    const isPoint = /^(?:[-*]|•|\d+[.)])\s+/.test(line);
+    const body = line.replace(/^(?:[-*]|•|\d+[.)])\s+/, "");
+    if (!body) continue;
+    if (isPoint) {
+      seenPoint = true;
+      points.push(body);
+    } else if (!seenPoint) opener.push(body);
+    else rest.push(body);
+  }
+  if (points.length) return { opener: opener.join(" "), rest: rest.join(" "), points };
   const match = text.match(/^(.+?[.!?])\s+([\s\S]+)$/);
   if (match && match[1].length >= 24 && match[1].length <= 240 && match[2].length > 28) {
-    return { opener: match[1], rest: match[2] };
+    return { opener: match[1], rest: match[2], points: [] };
   }
-  return { opener: text, rest: "" };
+  return { opener: text, rest: "", points: [] };
 }
 
 function renderAnswerBlocks(ins) {
@@ -2128,11 +2323,12 @@ function renderAnswerBlocks(ins) {
     spokenCol.className = "ai-a-wrap ai-spoken-col";
     const aText = document.createElement("div");
     aText.className = "ai-a ai-spoken";
-    if (parts.rest) {
-      aText.innerHTML = `<p class="ai-a-opener">${escHtml(parts.opener)}</p><p class="ai-a-body">${escHtml(parts.rest)}</p>`;
-    } else {
-      aText.innerHTML = `<p class="ai-a-opener">${escHtml(parts.opener)}</p>`;
-    }
+    const opener = `<p class="ai-a-opener">${escHtml(parts.opener)}</p>`;
+    const rest = parts.rest ? `<p class="ai-a-body">${escHtml(parts.rest)}</p>` : "";
+    const pointList = parts.points.length
+      ? `<ul class="ai-points">${parts.points.map((point) => `<li>${escHtml(point)}</li>`).join("")}</ul>`
+      : "";
+    aText.innerHTML = opener + rest + pointList;
     spokenCol.appendChild(aText);
     if (!blocks.length) {
       const pill = document.createElement("div");

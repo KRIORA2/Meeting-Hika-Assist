@@ -720,6 +720,19 @@ body {
   color: #e8eefc;
   font-weight: 500;
 }
+.ai-points {
+  margin: 6px 0 0;
+  padding: 0 0 0 18px;
+  list-style: disc;
+  white-space: normal;
+}
+.ai-points li {
+  margin: 0 0 7px;
+  font-size: 15px;
+  line-height: 1.55;
+  color: #e8eefc;
+  font-weight: 500;
+}
 .ai-answer-row {
   display: flex;
   flex-wrap: wrap;

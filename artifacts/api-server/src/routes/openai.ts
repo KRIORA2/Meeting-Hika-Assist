@@ -11,6 +11,7 @@ import {
   extractKeyPoints,
   isCodeIntent,
   isMeaningQuestion,
+  isPointwiseQuestion,
   isProcessQuestion,
   looksLikeCodeDump,
   looksLikeUsEnglish,
@@ -18,7 +19,7 @@ import {
   stripCodeFences,
   toSpokenAnswer,
 } from "../lib/answer-quality";
-import { CANDIDATE_IDENTITY, VOICE_EXAMPLES, SENIOR_ANSWER_LENS, matchingSubjects, subjectContext, detectSpeakMode, speakModeCue } from "../lib/interview-voice";
+import { CANDIDATE_IDENTITY, VOICE_EXAMPLES, matchingSubjects, subjectContext, detectSpeakMode, speakModeCue, answerFormatCue } from "../lib/interview-voice";
 
 const router = Router();
 
@@ -42,6 +43,45 @@ const DEFAULT_REALTIME_MODEL = process.env.OPENAI_REALTIME_MODEL || "gpt-realtim
 const DEFAULT_REALTIME_TRANSCRIPTION_MODEL = process.env.OPENAI_REALTIME_TRANSCRIPTION_MODEL || "gpt-4o-transcribe";
 const DEFAULT_REALTIME_NOISE_REDUCTION = process.env.OPENAI_REALTIME_NOISE_REDUCTION === "far_field" ? "far_field" : "near_field";
 const TRANSCRIPTION_PROMPT = "A clear American English question from a data engineering meeting.";
+
+function wantsAnalyzeStream(req: Request) {
+  return req.body?.stream === true || String(req.headers.accept || "").includes("ndjson");
+}
+
+function extractJsonStringField(raw: string, field: string) {
+  const key = `"${field}"`;
+  const start = raw.indexOf(key);
+  if (start < 0) return "";
+  const colon = raw.indexOf(":", start + key.length);
+  if (colon < 0) return "";
+  let index = colon + 1;
+  while (index < raw.length && /\s/.test(raw[index] || "")) index += 1;
+  if (raw[index] !== "\"") return "";
+  index += 1;
+  let out = "";
+  while (index < raw.length) {
+    const ch = raw[index];
+    if (ch === "\\") {
+      const next = raw[index + 1];
+      if (next === "n") out += "\n";
+      else if (next === "t") out += "\t";
+      else if (next === "r") out += "\r";
+      else if (next === "\"") out += "\"";
+      else if (next === "\\") out += "\\";
+      else if (next === "u" && raw.length > index + 5) {
+        out += String.fromCharCode(Number.parseInt(raw.slice(index + 2, index + 6), 16) || 32);
+        index += 6;
+        continue;
+      } else if (next) out += next;
+      index += 2;
+      continue;
+    }
+    if (ch === "\"") return out;
+    out += ch;
+    index += 1;
+  }
+  return out;
+}
 
 const ALLOWED_ANALYSIS_MODELS = new Set(
   (process.env.OPENAI_ALLOWED_MODELS || "gpt-4.1,gpt-4o")
@@ -118,12 +158,12 @@ router.post("/openai/realtime/session", async (req, res) => {
   const modeInstructions = mode === "interview"
     ? [
       "You are the candidate: a working senior data engineer speaking out loud to an interviewer.",
-      "Conversational spoken English. No bullet lists. No headings.",
+      "Conversational spoken English. Point-wise when they asked for steps, types, or components. Paragraph-wise otherwise. No headings.",
       speakModeCue(speakMode),
     ]
     : [
       "You are that same senior engineer on a live work call.",
-      "Conversational spoken English. No bullet lists. No headings.",
+      "Conversational spoken English. Point-wise when they asked for steps, types, or components. Paragraph-wise otherwise. No headings.",
       speakModeCue(speakMode),
     ];
 
@@ -135,7 +175,7 @@ router.post("/openai/realtime/session", async (req, res) => {
     "Write every answer in US English with American spelling. Never reply in Hindi or any other language.",
     "If the transcript is not a clear US English question, say you did not catch the question. Do not invent a topic from foreign or nonsense words.",
     "Answer the spoken question as captured. Do not swap their words for resume keywords or guessed jargon.",
-    "LOCKDOWN: same shape for every question. Open as a real employee explaining the topic, then walk the complete process they asked about. No • bullets unless they asked for a list. No headings like Definition or Best Practices.",
+    "LOCKDOWN: employee opener, then the complete process. Point-wise when the question has steps, types, or components. Paragraph-wise when it is a single idea. No headings like Definition or Best Practices.",
     "Do not force 'In my current project' if the resume does not name one. Still speak as someone who does this work.",
     "No 'As an AI', no 'Great question', no 'Based on the conversation', no 'I'm not aware'. Never start with Yeah, So basically, or Right so.",
     "Do not invent projects, metrics, incidents, or employers. If the resume does not support a claim, speak as a general industry approach.",
@@ -338,9 +378,9 @@ function sanitizeProductionCode(code: string): string {
     .replace(/['"]s3:\/\/my-bucket\/?['"]/gi, "'abfss://bronze@examplestorage.dfs.core.windows.net/inbound/'");
 }
 
-const JOIN_FALLBACK = "Inner join keeps only matching keys. Left join keeps every row from the left and fills nulls on the right when there's no match. Right join is the opposite. In practice I almost always write left joins from the driving table, for example employees left join departments, so I never drop someone who hasn't been assigned yet.";
-const LAKEVIEW_FALLBACK = "I'd confirm which they mean, because two things get called lake view. Databricks Lakeview is the dashboarding and AI/BI layer, not a table. For example analysts build those dashboards on Gold or a SQL warehouse. If they mean a lakehouse view, that's a SQL view over Delta so people query a stable name. From a production perspective I would not point reporting at bronze files.";
-const TRANSFORM_FALLBACK = "I don't think of load as a list of PySpark functions. In a typical Azure load, files land in ADLS bronze, then the notebook types and keeps the columns we need. For example, withColumn for derived fields, join for reference data, groupBy only when silver or gold needs an aggregate. From a production perspective we write Delta and the next job reads that, not the raw files.";
+const JOIN_FALLBACK = "These are how I keep or drop rows when two tables meet.\n• Inner join keeps only matching keys.\n• Left join keeps every row from the driving table and fills nulls when the right side has no match.\n• Right join is the opposite.\nFor example I almost always left join employees to departments so I never drop someone who is not assigned yet.";
+const LAKEVIEW_FALLBACK = "I'd confirm which they mean, because two things get called lake view.\n• Databricks Lakeview is the dashboarding and AI/BI layer, not a table. For example analysts build those dashboards on Gold or a SQL warehouse.\n• A lakehouse view is a SQL view over Delta so people query a stable name without touching raw files.";
+const TRANSFORM_FALLBACK = "I don't think of load as a list of PySpark functions. In a typical Azure load I use bronze landing, then a notebook to type the columns we need.\n• Filter and select so bronze junk never reaches silver.\n• withColumn for derived fields and standard names.\n• Join reference data, and groupBy only when gold needs an aggregate.\n• Write Delta, and the next job reads that, not the raw files.";
 
 function spokenFallbackFor(question: string): string {
   const t = String(question || "").toLowerCase();
@@ -762,14 +802,25 @@ router.post("/openai/analyze", async (req, res) => {
     userContent.push({ type: "text", text: conversationContext });
   }
 
+  const streamToClient = wantsAnalyzeStream(req);
   try {
     const analyzeStarted = Date.now();
+    if (streamToClient) {
+      res.status(200);
+      res.setHeader("Content-Type", "application/x-ndjson; charset=utf-8");
+      res.setHeader("Cache-Control", "no-cache, no-transform");
+      res.setHeader("X-Accel-Buffering", "no");
+      if (typeof (res as Response & { flushHeaders?: () => void }).flushHeaders === "function") {
+        (res as Response & { flushHeaders: () => void }).flushHeaders();
+      }
+    }
     // Only ground from uploaded documents when the question is clearly resume/profile related.
     if (useGrounding && uploadedDocs && uploadedDocs.length > 0) {
       const docsLines: string[] = [];
       let resumeGrounding = "";
       try {
         const docsToRead = uploadedDocs.slice(0, 3);
+        const docContextLines: string[] = [];
         for (const d of docsToRead) {
           const id = d.id;
           const name = d.name || id || "file";
@@ -779,12 +830,15 @@ router.post("/openai/analyze", async (req, res) => {
             const stored = await readUserDocument(req.authUser!.id, id);
             if (!stored) continue;
             const content = (await extractDocumentTextFromBuffer(stored.name, stored.buffer)).replace(/\s+/g, " ").trim();
-            if (content) {
-              const clipped = content.slice(0, 7000);
-              docsLines.push(`Content (first 1200 chars):\n${clipped}`);
-              if (!resumeGrounding && (resumeQuestion || isResumeLikeFile(name))) {
-                resumeGrounding = buildResumeSignal(clipped) || clipped;
-              }
+            if (!content) continue;
+            const clipped = content.slice(0, 7000);
+            docsLines.push(`Content (first 1200 chars):\n${clipped}`);
+            if (!resumeGrounding && (resumeQuestion || isResumeLikeFile(name))) {
+              resumeGrounding = buildResumeSignal(clipped) || clipped;
+            }
+            const relevantSnippet = buildRelevantDocumentSnippet(content, explicitQuestion ?? transcript ?? "");
+            if (relevantSnippet) {
+              docContextLines.push(`Document: ${name}\nRelevant excerpt:\n${relevantSnippet}`);
             }
           } catch { /* non-fatal */ }
         }
@@ -797,31 +851,13 @@ router.post("/openai/analyze", async (req, res) => {
             text: `Primary resume context for candidate answers:\n${resumeGrounding}`,
           });
         }
-
-        if (docsToRead.length > 0 && useGrounding) {
-          const docContextLines: string[] = [];
-          for (const d of docsToRead) {
-            const id = d.id;
-            const name = d.name || id || "file";
-            if (!id) continue;
-            try {
-              const stored = await readUserDocument(req.authUser!.id, id);
-              if (!stored) continue;
-              const content = (await extractDocumentTextFromBuffer(stored.name, stored.buffer)).replace(/\s+/g, " ").trim();
-              const relevantSnippet = buildRelevantDocumentSnippet(content, explicitQuestion ?? transcript ?? "");
-              if (relevantSnippet) {
-                docContextLines.push(`Document: ${name}\nRelevant excerpt:\n${relevantSnippet}`);
-              }
-            } catch { /* non-fatal */ }
-          }
-          if (docContextLines.length) {
-            userContent.push({ type: "text", text: `Relevant document context:\n${docContextLines.join("\n\n")}` });
-          }
+        if (docContextLines.length) {
+          userContent.push({ type: "text", text: `Relevant document context:\n${docContextLines.join("\n\n")}` });
         }
       } catch { /* ignore upload doc read errors */ }
     }
 
-    if (uploadedDocs && uploadedDocs.length > 0) {
+    if (useGrounding && uploadedDocs && uploadedDocs.length > 0) {
       try {
         const semanticContext = await retrieveRelevantResumeContext({
           uploadedDocs,
@@ -850,7 +886,7 @@ router.post("/openai/analyze", async (req, res) => {
       : `MEETING: You are that same senior engineer on a live work call. Conversational. Not notes.`;
     const codeVoice = codeIntent
       ? `They asked for a query or script. Still open as a working employee (what I'd run and why). Then put the full production query/script in sections. Azure paths use abfss://example storage, never s3://my-bucket.`
-      : `They did NOT ask for code. Same shape as every other question: employee explanation of the topic, then the complete process for this question. No SQL dumps. No • bullets. Do not copy previous coding style.`;
+      : `They did NOT ask for code. Employee explanation first, then the complete process. Use • points when this question has steps, types, or components. Use paragraphs when it is a single idea. No SQL dumps. Do not copy previous coding style.`;
 
     const completion = await openai.chat.completions.create({
       model: analysisModel,
@@ -860,6 +896,8 @@ router.post("/openai/analyze", async (req, res) => {
         {
           role: "system",
           content: `You are Hika, a live interview copilot. The candidate glances at your text and speaks it. Never generate audio.
+${CANDIDATE_IDENTITY}
+${VOICE_EXAMPLES}
 
 Session mode: ${mode}
 Detected question type: ${questionType}
@@ -867,29 +905,12 @@ Speak mode: ${speakMode}
 ${modeVoice}
 ${codeVoice}
 ${speakModeCue(speakMode)}
-
-You ARE a senior Azure data engineer on a live ${mode}. Resume, JD, session guidance, and frozen SUBJECT DOCS are your knowledge. Not a coach. Not Wikipedia.
-${CANDIDATE_IDENTITY}
+${answerFormatCue(inferredQuestion)}
 Detected subjects for this question: ${subjects.join(", ")}
 If the resume names an employer, project, or stack, use those exact names. Never invent the rest.
 
 FROZEN TOPIC PACK (retrieved slices only — speak from these, do not recite as notes):
 ${subjectContext(inferredQuestion)}
-
-${SENIOR_ANSWER_LENS}
-
-SPOKEN ANSWER LOCKDOWN — same for every client question:
-- Open as a real working employee: what this topic is and how I work with it.
-- Then walk the COMPLETE process this question is asking for, start to finish. Do not stop at two or four talking points.
-- Cover the steps in order, what I check, and how I know it worked. Speak it as sentences, not • bullets.
-- keyPoints: 3–5 short glanceable anchors from that process — specific phrases, not only tool names like "PySpark". They are a side panel, not the answer.
-- Answer THIS question only. Conversation memory is for follow-ups like "so" or "this", not for copying SQL.
-- Do not force "In my current project" if the resume does not name one.
-- Meaning questions stay spoken. Do not dump SELECT templates unless they asked to write SQL.
-- Long enough to finish the process. Simple process ~30–45 seconds. Normal 45–75. Architecture up to ~90.
-- Name real tools from the matching subject docs. Map AWS/GCP/Kafka when that is the question.
-
-${VOICE_EXAMPLES}
 
 WHEN THEY ASK FOR A QUERY OR SCRIPT:
 - answer = employee explanation of what the query does and one production caveat
@@ -899,7 +920,7 @@ WHEN THEY ASK FOR A QUERY OR SCRIPT:
 
 Never do this:
 - Headings like Contextual Explanation, Definition, Implementation, Best Practices
-- Bullet lists (•) in the spoken answer
+- A bullet dump with no employee opener
 - Telegram notes like "Architecture Center is sources into a lake..."
 - Generic textbook answers with no "what I actually do"
 - REST / SCIM / requests.post unless they asked for that script
@@ -908,12 +929,11 @@ Never do this:
 
 If the transcript is not a clear English question, answer only: I didn't catch a clear English question. Press Listen again.
 
-Output JSON only:
+Output JSON only. Put answer first so it can stream:
 {
+  "answer": "Employee opener, then POINT-WISE • points or PARAGRAPH-WISE process as THIS question requires",
   "question": "The speaker's English question, ≤60 chars",
   "questionType": "${questionType}",
-  "recommendedAnswer": "Employee explanation plus the complete process, spoken, no bullets",
-  "answer": "Employee explanation plus the complete process, spoken, no bullets",
   "keyPoints": ["process anchor 1", "process anchor 2", "process anchor 3"],
   "confidence": "high|medium|low",
   "sections": []
@@ -924,10 +944,23 @@ sections stay empty unless they explicitly asked for a query or script.`,
         { role: "user", content: userContent },
       ],
       response_format: { type: "json_object" },
-      max_tokens: 2200,
+      max_tokens: codeIntent ? 1600 : 900,
+      stream: true,
     });
 
-    const raw = completion.choices[0]?.message?.content ?? "{}";
+    let raw = "";
+    let lastPartial = "";
+    for await (const chunk of completion) {
+      raw += chunk.choices[0]?.delta?.content ?? "";
+      if (!streamToClient) continue;
+      const partial = extractJsonStringField(raw, "answer");
+      if (partial.length < 24 || partial === lastPartial) continue;
+      lastPartial = partial;
+      res.write(`${JSON.stringify({ type: "delta", question: explicitQuestion || "", answer: partial })}\n`);
+      if (typeof (res as Response & { flush?: () => void }).flush === "function") {
+        (res as Response & { flush: () => void }).flush();
+      }
+    }
     let result: {
       question?: string;
       questionType?: string;
@@ -951,6 +984,7 @@ sections stay empty unless they explicitly asked for a query or script.`,
     }
 
     const askedForCode = isCodeIntent(explicitQuestion || inferredQuestion);
+    const askedForPoints = isPointwiseQuestion(inferredQuestion);
     const sections = (result.sections ?? []).map((s) => ({
       ...s,
       language: normalizeLanguage(s.language),
@@ -996,17 +1030,18 @@ sections stay empty unless they explicitly asked for a query or script.`,
       for (const section of sections) {
         section.content = sanitizeProductionCode(section.content);
       }
-      const spoken = toSpokenAnswer(stripCodeFences(looksLikeCodeDump(answer) ? recommendedAnswer : answer) || recommendedAnswer);
+      const spoken = toSpokenAnswer(stripCodeFences(looksLikeCodeDump(answer) ? recommendedAnswer : answer) || recommendedAnswer, askedForPoints);
       answer = spoken || "I'd run this in Spark. It does the job in one pass, and I'd still check format and schema before I trust the load.";
     } else {
       const source = [recommendedAnswer, answer].find((text) => text && !looksLikeCodeDump(text) && !/SELECT \* FROM table1/i.test(text || "")) || "";
-      answer = toSpokenAnswer(source);
+      answer = toSpokenAnswer(source, askedForPoints);
       if (!answer || looksLikeCodeDump(answer)) {
-        answer = toSpokenAnswer(spokenFallbackFor(inferredQuestion) || answer);
+        answer = toSpokenAnswer(spokenFallbackFor(inferredQuestion) || answer, askedForPoints);
       }
       if (!answer && isProcessQuestion(inferredQuestion)) {
         answer = toSpokenAnswer(
           "I don't grant people one by one. I put them in an Azure AD group and grant the group on Unity Catalog. ADF service principals get the same pattern. Then I validate they can open the schema, not the whole lake.",
+          askedForPoints,
         );
       }
       sections.splice(0, sections.length);
@@ -1016,18 +1051,19 @@ sections stay empty unless they explicitly asked for a query or script.`,
       answer = "I didn't catch a clear English question. Press Listen again.";
     }
 
-    const quality = scoreEmployeeAnswer(answer, askedForCode);
+    const quality = scoreEmployeeAnswer(answer, askedForCode, askedForPoints);
     if (!quality.ok) {
       req.log.warn({
         event: !askedForCode && quality.reason === "code_dump" ? "analyze.code_dump_on_howto" : "analyze.quality_fail",
         reason: quality.reason,
         askedForCode,
+        askedForPoints,
       });
       if (!askedForCode) {
         const fallback = spokenFallbackFor(inferredQuestion);
-        if (fallback) answer = fallback;
-        else answer = toSpokenAnswer(answer);
-        if (!scoreEmployeeAnswer(answer, false).ok && isProcessQuestion(inferredQuestion)) {
+        if (fallback) answer = toSpokenAnswer(fallback, askedForPoints);
+        else answer = toSpokenAnswer(answer, askedForPoints);
+        if (!scoreEmployeeAnswer(answer, false, askedForPoints).ok && isProcessQuestion(inferredQuestion)) {
           answer = "I don't grant people one by one. I put them in an Azure AD group and grant the group on Unity Catalog. ADF service principals get the same pattern. Then I validate they can open the schema, not the whole lake.";
         }
       }
@@ -1052,7 +1088,7 @@ sections stay empty unless they explicitly asked for a query or script.`,
       ? result.keyPoints.map((point) => String(point || "").trim()).filter(Boolean).slice(0, 5)
       : extractKeyPoints(answer);
 
-    res.json({
+    const payload = {
       question: safeQuestion,
       questionType: result.questionType ?? questionType,
       answer,
@@ -1062,10 +1098,21 @@ sections stay empty unless they explicitly asked for a query or script.`,
       confidence: result.confidence ?? "low",
       sections: askedForCode ? sections : [],
       credits: spent.credits,
-    });
+    };
+    if (streamToClient) {
+      res.write(`${JSON.stringify({ type: "done", ...payload })}\n`);
+      res.end();
+    } else {
+      res.json(payload);
+    }
   } catch (err) {
     req.log.error({ err }, "OpenAI analyze error");
     await grantCredits(req.authUser!.id, CREDIT_COSTS.analyze).catch(() => undefined);
+    if (streamToClient && res.headersSent) {
+      res.write(`${JSON.stringify({ type: "error", error: "Failed to analyze context" })}\n`);
+      res.end();
+      return;
+    }
     res.status(500).json({ error: "Failed to analyze context" });
   }
 });

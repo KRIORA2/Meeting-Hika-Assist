@@ -225,7 +225,10 @@ function isMediaPermission(permission: string) {
     || permission === "mediaKeySystem";
 }
 
+let loopbackCache: { at: number; source: Electron.DesktopCapturerSource | null } = { at: 0, source: null };
+
 async function pickLoopbackSource() {
+  if (loopbackCache.source && Date.now() - loopbackCache.at < 20_000) return loopbackCache.source;
   const sources = await desktopCapturer.getSources({
     types: ["screen", "window"],
     thumbnailSize: { width: 1, height: 1 },
@@ -233,7 +236,9 @@ async function pickLoopbackSource() {
   const meetingWindow = sources.find((source) =>
     /zoom|teams|meet|webex|slack|skype|discord|chrome|msedge|edge/i.test(source.name || "")
   );
-  return meetingWindow || sources.find((source) => source.id.startsWith("screen:")) || sources[0] || null;
+  const source = meetingWindow || sources.find((item) => item.id.startsWith("screen:")) || sources[0] || null;
+  loopbackCache = { at: Date.now(), source };
+  return source;
 }
 
 function allowMediaPermissions(ses: Electron.Session) {
