@@ -15,6 +15,7 @@ import {
   listUserSessions,
   updateSession,
 } from "../lib/store";
+import { warmSessionMemory } from "../lib/session-memory";
 
 const router = Router();
 
@@ -34,6 +35,7 @@ router.post("/sessions", async (req, res) => {
       return res.status(400).json({ error: parsed.error.flatten() });
     }
     const session = await createSession(req.authUser!.id, parsed.data.title, parsed.data.platform);
+    void warmSessionMemory(req.authUser!.id);
     return res.status(201).json(session);
   } catch (err) {
     req.log.error({ err }, "POST /sessions failed");

@@ -20,6 +20,7 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { getAccessToken } from "@/lib/auth";
+import { prepareInterviewPersona } from "@/lib/prepare-persona";
 import InsightAnswer from "@/components/InsightAnswer";
 import { acceptsRealtimeResponseEvent, appendRealtimeDelta } from "@/services/realtimeProtocol";
 
@@ -710,7 +711,7 @@ function PiPContent({
 
           <div className="flex-1 overflow-y-auto p-3 space-y-3">
             <div className="flex flex-col gap-2">
-              <label className="text-[11px] text-slate-400">Upload resume / docs (optional)</label>
+              <label className="text-[11px] text-slate-400">Upload resume and JD (optional)</label>
               <input type="file" accept=".pdf,.docx,.txt,.md,.json,.csv" multiple onChange={async (e) => {
                 const files = e.target.files;
                 if (!files || files.length === 0) return;
@@ -749,7 +750,12 @@ function PiPContent({
                   if (!res.ok) throw new Error('upload failed');
                   const j = await res.json();
                   const added = (j.files || []).map((f: any) => ({ id: f.id, name: f.name }));
-                  setUploadedDocs((prev) => { const next = [...prev, ...added]; uploadedDocsRef.current = next; return next; });
+                  setUploadedDocs((prev) => {
+                    const next = [...prev, ...added];
+                    uploadedDocsRef.current = next;
+                    void prepareInterviewPersona(next);
+                    return next;
+                  });
                 } catch (err) {
                   console.error('upload error', err);
                 }
@@ -1026,9 +1032,9 @@ function PiPContent({
         ? `ANSWER THIS: "${question}"\n${profileContext}\n\n${recentTranscript}`
         : `${profileContext}\n${latestText.slice(-400)}`;
 
-    const historyForRequest = conversationHistoryRef.current.slice(-2).map((turn) => ({
+    const historyForRequest = conversationHistoryRef.current.slice(-4).map((turn) => ({
       role: turn.role,
-      content: String(turn.content || "").slice(0, turn.role === "assistant" ? 120 : 120),
+      content: String(turn.content || "").slice(0, turn.role === "assistant" ? 140 : 140),
     }));
     const userTurn = latestText.trim();
 
@@ -1042,7 +1048,7 @@ function PiPContent({
           transcript: ctx,
           screenshotBase64: screenshot ?? undefined,
           sessionId: sessionIdRef.current ?? undefined,
-          uploadedDocs: [],
+          uploadedDocs: uploadedDocsRef.current.slice(0, 3),
           model: preferredModel,
           mode: sessionMode,
           history: historyForRequest,
@@ -1739,6 +1745,9 @@ function PiPContent({
       const session = await createSession.mutateAsync({ data: { title: normalizedTitle, platform } });
       sessionIdRef.current = session.id;
       sessionGuidanceRef.current = [sessionGuidance.trim(), modeGuidance].filter(Boolean).join("\n");
+      if (uploadedDocsRef.current.length) {
+        void prepareInterviewPersona(uploadedDocsRef.current);
+      }
       forceHttpFallbackRef.current = false;
       cancelledResponseIdsRef.current.clear();
       persistedResponseIdsRef.current.clear();

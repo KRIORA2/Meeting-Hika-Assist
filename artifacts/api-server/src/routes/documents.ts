@@ -2,6 +2,7 @@ import { Router } from "express";
 import path from "path";
 import { randomUUID } from "node:crypto";
 import { deleteDocument, saveDocument } from "../lib/store";
+import { forgetPersona, ingestDocument } from "../lib/persona";
 
 const router = Router();
 const MAX_FILES_PER_UPLOAD = 3;
@@ -49,7 +50,9 @@ router.post("/documents", async (req, res) => {
 
     const saved = [];
     for (const file of validated) {
-      saved.push(await saveDocument(req.authUser!.id, randomUUID(), file.name, file.buffer));
+      const stored = await saveDocument(req.authUser!.id, randomUUID(), file.name, file.buffer);
+      await ingestDocument(req.authUser!.id, stored.id, stored.name, file.buffer).catch(() => undefined);
+      saved.push(stored);
     }
     res.json({ files: saved });
   } catch (err) {
@@ -71,6 +74,7 @@ router.delete("/documents/:id", async (req, res) => {
       res.status(404).json({ error: "Document not found" });
       return;
     }
+    forgetPersona(req.authUser!.id);
     res.status(204).end();
   } catch (err) {
     req.log.error({ err }, "Document deletion failed");

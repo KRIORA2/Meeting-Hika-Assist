@@ -3,10 +3,10 @@ import { openai } from "@workspace/integrations-openai-ai-server";
 import { AnalyzeContextBody, TranscribeAudioBody } from "@workspace/api-zod";
 import type { ChatCompletionContentPart } from "openai/resources/chat/completions";
 import { Buffer } from "node:buffer";
-import path from "path";
-import pdfParse from "pdf-parse";
-import mammoth from "mammoth";
 import { readUserDocument, consumeCredits, grantCredits, CREDIT_COSTS } from "../lib/store";
+import { extractDocumentTextFromBuffer } from "../lib/document-text";
+import { preparePersona, resolvePersona } from "../lib/persona";
+import { recallSessionMemory, rememberAnswer, warmSessionMemory } from "../lib/session-memory";
 import {
   extractKeyPoints,
   isCodeIntent,
@@ -138,21 +138,12 @@ router.post("/openai/realtime/session", async (req, res) => {
   const spent = await takeCredits(req, res, CREDIT_COSTS.realtime);
   if (!spent) return;
 
-  // Document extraction happens once when the persistent Realtime session is
-  // created, never for every partial transcription event.
-  const documentContext: string[] = [];
-  if (uploadedDocs.length) {
-    for (const doc of uploadedDocs) {
-      try {
-        const stored = await readUserDocument(req.authUser!.id, doc.id);
-        if (!stored) continue;
-        const content = (await extractDocumentTextFromBuffer(stored.name, stored.buffer)).replace(/\s+/g, " ").trim();
-        if (content) documentContext.push(`${doc.name || stored.name || "Profile"}: ${buildResumeSignal(content).slice(0, 2200)}`);
-      } catch {
-        // A document is optional context; it must not block live voice setup.
-      }
-    }
-  }
+  const jobDescription = typeof req.body?.jobDescription === "string"
+    ? req.body.jobDescription.slice(0, 4_000)
+    : "";
+  const persona = await resolvePersona(req.authUser!.id, uploadedDocs, jobDescription).catch(() => null);
+  await warmSessionMemory(req.authUser!.id).catch(() => undefined);
+  const learned = recallSessionMemory(req.authUser!.id, typeof req.body?.transcript === "string" ? req.body.transcript : "");
 
   const speakMode = detectSpeakMode(typeof req.body?.transcript === "string" ? req.body.transcript : "");
   const modeInstructions = mode === "interview"
@@ -185,7 +176,8 @@ router.post("/openai/realtime/session", async (req, res) => {
     "If they asked for a query or script: full real production SQL/PySpark in sections, then a short spoken explanation of that query.",
     ...modeInstructions,
     sessionGuidance ? `Persona / session guidance from the user (follow this strictly):\n${sessionGuidance}` : "",
-    documentContext.length ? `Resume and documents (this is who you are):\n${documentContext.join("\n")}` : "",
+    persona?.card ? `CANDIDATE PROFILE — you ARE this person:\n${persona.card}` : "",
+    learned || "",
     `Frozen topic pack:\n${subjectContext(typeof req.body?.transcript === "string" ? req.body.transcript : "")}`,
   ].filter(Boolean).join("\n");
 
@@ -265,10 +257,6 @@ function isResumeQuestion(text: string): boolean {
   return /(tell me about yourself|introduce yourself|walk me through your resume|previous project|current project|roles and responsibilities|what do you do|your background|your experience|why should we hire you|read.*resume|analy[sz]e.*resume|uploaded.*resume|resume.*job description|resume.*\bjd\b|job description.*resume|\bjd\b.*resume|act like me|answer as me)/i.test(t);
 }
 
-function isResumeLikeFile(name: string): boolean {
-  return /(resume|cv|profile|experience|bio)/i.test(name);
-}
-
 type InterviewQuestionType =
   | "HR Question"
   | "Technical Question"
@@ -327,26 +315,6 @@ function confidenceScoreFromLabel(value?: string): number {
   if (t === "medium") return 78;
   if (t === "low") return 62;
   return 72;
-}
-
-async function extractDocumentTextFromBuffer(fileName: string, buffer: Buffer): Promise<string> {
-  const ext = path.extname(fileName).toLowerCase();
-
-  if (ext === ".txt" || ext === ".md" || ext === ".json" || ext === ".csv") {
-    return buffer.toString("utf8");
-  }
-
-  if (ext === ".pdf") {
-    const parsed = await pdfParse(buffer);
-    return parsed.text || "";
-  }
-
-  if (ext === ".docx") {
-    const parsed = await mammoth.extractRawText({ buffer });
-    return parsed.value || "";
-  }
-
-  return "";
 }
 
 function isLikelyCode(text: string): boolean {
@@ -576,7 +544,7 @@ async function retrieveRelevantResumeContext(args: {
 function buildConversationContext(history?: Array<{ role?: string; content?: string }> | null): string {
   if (!Array.isArray(history) || history.length === 0) return "";
 
-  const turns = history.slice(-2).map((turn) => {
+  const turns = history.slice(-6).map((turn) => {
     const role = turn.role === "assistant" ? "Assistant" : "User";
     const raw = normalizeContextText(turn.content || "");
     if (!raw) return null;
@@ -745,6 +713,30 @@ JSON schema:
   return { answer, sections };
 }
 
+router.post("/openai/prepare-persona", async (req, res) => {
+  const uploadedDocs = Array.isArray(req.body?.uploadedDocs)
+    ? req.body.uploadedDocs.slice(0, 3).filter((doc: unknown): doc is { id: string; name?: string } =>
+      !!doc && typeof (doc as { id?: unknown }).id === "string")
+    : [];
+  const jobDescription = typeof req.body?.jobDescription === "string"
+    ? req.body.jobDescription.slice(0, 4_000)
+    : "";
+  try {
+    const persona = await preparePersona(req.authUser!.id, uploadedDocs, jobDescription);
+    void warmSessionMemory(req.authUser!.id);
+    res.json({
+      ready: Boolean(persona?.card),
+      hasResume: persona?.hasResume ?? false,
+      hasJd: persona?.hasJd ?? false,
+      skills: persona?.skills?.slice(0, 12) ?? [],
+      name: persona?.name || "",
+    });
+  } catch (err) {
+    req.log.warn({ err }, "Persona prepare failed");
+    res.json({ ready: false, hasResume: false, hasJd: false, skills: [], name: "" });
+  }
+});
+
 router.post("/openai/analyze", async (req, res) => {
   const parsed = AnalyzeContextBody.safeParse(req.body);
   if (!parsed.success) {
@@ -753,8 +745,9 @@ router.post("/openai/analyze", async (req, res) => {
   }
 
   const { transcript, screenshotBase64, uploadedDocs, history = [], mode, model: requestedModel } = parsed.data;
-  const spent = await takeCredits(req, res, CREDIT_COSTS.analyze);
+    const spent = await takeCredits(req, res, CREDIT_COSTS.analyze);
   if (!spent) return;
+  void warmSessionMemory(req.authUser!.id);
   const analysisModel = requestedModel && ALLOWED_ANALYSIS_MODELS.has(requestedModel)
     ? requestedModel
     : DEFAULT_ANALYSIS_MODEL;
@@ -773,8 +766,7 @@ router.post("/openai/analyze", async (req, res) => {
     });
     return;
   }
-  const resumeQuestion = isResumeQuestion(explicitQuestion ?? transcript);
-  const useGrounding = shouldUseDocumentGrounding(explicitQuestion ?? transcript, uploadedDocs);
+  const persona = await resolvePersona(req.authUser!.id, uploadedDocs).catch(() => null);
 
   const userContent: ChatCompletionContentPart[] = [
     {
@@ -816,45 +808,13 @@ router.post("/openai/analyze", async (req, res) => {
         (res as Response & { flushHeaders: () => void }).flushHeaders();
       }
     }
-    // Only ground from uploaded documents when the question is clearly resume/profile related.
-    if (useGrounding && uploadedDocs && uploadedDocs.length > 0) {
-      const docsLines: string[] = [];
-      let resumeGrounding = "";
-      try {
-        const docsToRead = uploadedDocs.slice(0, 2);
-        for (const d of docsToRead) {
-          const id = d.id;
-          const name = d.name || id || "file";
-          if (!id) continue;
-          try {
-            const stored = await readUserDocument(req.authUser!.id, id);
-            if (!stored) continue;
-            const content = (await extractDocumentTextFromBuffer(stored.name, stored.buffer)).replace(/\s+/g, " ").trim();
-            if (!content) continue;
-            const clipped = content.slice(0, 1200);
-            docsLines.push(`- ${name}: ${clipped}`);
-            if (!resumeGrounding && (resumeQuestion || isResumeLikeFile(name))) {
-              resumeGrounding = buildResumeSignal(clipped) || clipped;
-            }
-          } catch { /* non-fatal */ }
-        }
-        if (resumeGrounding) {
-          userContent.push({
-            type: "text",
-            text: `Primary resume context for candidate answers:\n${resumeGrounding.slice(0, 900)}`,
-          });
-        } else if (docsLines.length) {
-          userContent.push({ type: "text", text: `User uploaded documents:\n${docsLines.join("\n")}` });
-        }
-      } catch { /* ignore upload doc read errors */ }
-    }
-
     const inferredQuestion = explicitQuestion ?? transcript ?? "";
     const questionType = detectQuestionType(inferredQuestion);
     const speakMode = detectSpeakMode(inferredQuestion);
     const codeIntent = isCodeIntent(inferredQuestion);
     const spokenAnswer = !codeIntent;
     const subjects = matchingSubjects(inferredQuestion);
+    const learned = recallSessionMemory(req.authUser!.id, inferredQuestion);
     const modeVoice = mode === "interview"
       ? `INTERVIEW: You are the candidate speaking out loud. Conversational. Not notes.`
       : `MEETING: You are that same senior engineer on a live work call. Conversational. Not notes.`;
@@ -871,6 +831,10 @@ router.post("/openai/analyze", async (req, res) => {
           role: "system",
           content: `You are Hika, a live interview copilot. The candidate glances at your text and speaks it. Never generate audio.
 ${CANDIDATE_IDENTITY}
+${persona?.card
+  ? `CANDIDATE PROFILE — you ARE this person. Their stack wins over the default Azure list. Combine their skills with frozen topic knowledge.\n${persona.card}`
+  : "No resume uploaded. Sound like a senior data engineer without inventing a named employer."}
+${learned || ""}
 
 Session mode: ${mode}. Speak mode: ${speakMode}. ${modeVoice}
 ${codeVoice}
@@ -1044,6 +1008,7 @@ sections empty unless they asked to write a query/script. Azure paths use abfss 
     } else {
       res.json(payload);
     }
+    void rememberAnswer(req.authUser!.id, explicitQuestion || safeQuestion, answer);
   } catch (err) {
     req.log.error({ err }, "OpenAI analyze error");
     await grantCredits(req.authUser!.id, CREDIT_COSTS.analyze).catch(() => undefined);

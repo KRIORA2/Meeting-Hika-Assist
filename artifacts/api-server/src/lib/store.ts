@@ -356,3 +356,48 @@ export async function applyFreePlan(userId: string) {
   }, { merge: true });
   return getUserAccount(userId);
 }
+
+export type SessionMemoryItem = {
+  question: string;
+  answer: string;
+  subjects: string[];
+  at: number;
+};
+
+export async function loadUserMemory(userId: string): Promise<SessionMemoryItem[]> {
+  const snap = await adminDb().collection("userMemory").doc(userId).get();
+  if (!snap.exists) return [];
+  const data = snap.data() || {};
+  const items = Array.isArray(data.items) ? data.items : [];
+  return items
+    .map((item: unknown) => {
+      if (!item || typeof item !== "object") return null;
+      const row = item as { question?: unknown; answer?: unknown; subjects?: unknown; at?: unknown };
+      const question = String(row.question || "").trim();
+      const answer = String(row.answer || "").trim();
+      if (!question || !answer) return null;
+      return {
+        question: question.slice(0, 180),
+        answer: answer.slice(0, 280),
+        subjects: Array.isArray(row.subjects) ? row.subjects.map((subject) => String(subject)).slice(0, 4) : [],
+        at: typeof row.at === "number" ? row.at : Date.now(),
+      };
+    })
+    .filter((item): item is SessionMemoryItem => Boolean(item));
+}
+
+export async function saveUserMemory(userId: string, items: SessionMemoryItem[]) {
+  await adminDb().collection("userMemory").doc(userId).set({
+    userId,
+    items: items.slice(0, 80),
+    updatedAt: new Date(),
+  });
+}
+
+export async function listRecentUserInsights(userId: string, limit = 80): Promise<InsightRecord[]> {
+  const snap = await adminDb().collection("insights").where("userId", "==", userId).get();
+  return snap.docs
+    .map((doc: QueryDocumentSnapshot) => insightFromDoc(doc.id, doc.data()))
+    .sort((left: InsightRecord, right: InsightRecord) => right.createdAt.localeCompare(left.createdAt))
+    .slice(0, limit);
+}

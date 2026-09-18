@@ -496,11 +496,31 @@ async function uploadDocuments(files, listElement) {
     const response = await api("POST", "/api/documents", { files: toUpload });
     for (const file of response?.files || []) uploadedDocs.unshift({ id: file.id, name: file.name });
     if (listElement) listElement.textContent = uploadedDocs.length ? `${uploadedDocs.length} document${uploadedDocs.length === 1 ? "" : "s"} added` : "No documents added";
-    showToast(`${response?.files?.length || 0} document(s) added.`);
+    const prepared = await prepareInterviewPersona();
+    if (prepared?.ready) {
+      const skills = (prepared.skills || []).slice(0, 6).join(", ");
+      showToast(prepared.name
+        ? `Ready as ${prepared.name}${skills ? ` · ${skills}` : ""}`
+        : "Resume loaded. I'll answer as you.");
+    } else {
+      showToast(`${response?.files?.length || 0} document(s) added.`);
+    }
   } catch (error) {
     console.error("upload error", error);
     if (listElement) listElement.textContent = "Upload failed";
     showToast("Document upload failed.");
+  }
+}
+
+async function prepareInterviewPersona() {
+  if (!uploadedDocs.length && !(jobPostUrl?.value || "").trim()) return null;
+  try {
+    return await api("POST", "/api/openai/prepare-persona", {
+      uploadedDocs: uploadedDocs.slice(0, 3).map((doc) => ({ id: doc.id, name: doc.name })),
+      jobDescription: (jobPostUrl?.value || "").trim(),
+    });
+  } catch {
+    return null;
   }
 }
 
@@ -967,7 +987,9 @@ async function handleStart() {
     languageContext,
     (sessionGuidanceEl?.value || "").trim()
       ? `User persona prompt (follow strictly):\n${(sessionGuidanceEl?.value || "").trim()}`
-      : "If a resume is uploaded, review it and answer as that professional.",
+      : uploadedDocs.length
+        ? "A resume is uploaded. Answer as that person using their skills, expertise, and projects."
+        : "If a resume is uploaded, review it and answer as that professional.",
   ].filter(Boolean).join("\n");
   forceHttpFallback = false;
   cancelledRealtimeResponseIds.clear();
@@ -999,7 +1021,17 @@ async function handleStart() {
     startTimer();
     void ensureMicPermission();
     void refreshCredits();
-    if (uploadedDocs.length) showToast("Resume and documents loaded. Answers stay on screen.");
+    if (uploadedDocs.length || (jobPostUrl?.value || "").trim()) {
+      const prepared = await prepareInterviewPersona();
+      if (prepared?.ready) {
+        const skills = (prepared.skills || []).slice(0, 6).join(", ");
+        showToast(prepared.name
+          ? `Answering as ${prepared.name}${skills ? ` · ${skills}` : ""}`
+          : "Resume loaded. Answers stay on screen.");
+      } else {
+        showToast("Resume and documents loaded. Answers stay on screen.");
+      }
+    }
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err || "");
     if (err?.status === 401) {
@@ -1968,21 +2000,26 @@ async function analyze(utterance) {
   const context = [
     `ANSWER THIS: "${utterance.replace(/"/g, "'")}"`,
     sessionGuidance ? `Session guidance: ${sessionGuidance}` : "",
+    uploadedDocs.length
+      ? "Answer as the uploaded resume candidate. Use their skills and expertise with frozen technical knowledge."
+      : "Same shape every question: real-employee opener, then POINT-WISE for steps/types/components or PARAGRAPH-WISE for one idea. Do not invent employers, incidents, or file paths.",
     codeRequest
       ? "They asked for a query or script. Employee explanation first, then complete production code. Use abfss example paths, never s3://my-bucket."
-      : "Same shape every question: real-employee opener, then POINT-WISE for steps/types/components or PARAGRAPH-WISE for one idea. Do not invent employers, incidents, or file paths.",
+      : "",
     `Timestamp: ${new Date().toISOString()}`,
   ].filter(Boolean).join("\n");
   const body = {
     transcript: context,
     sessionId,
+    uploadedDocs: uploadedDocs.slice(0, 3).map((doc) => ({ id: doc.id, name: doc.name })),
     model: selectedModel || "gpt-4o",
     mode: selectedSessionMode === "call" ? "meeting" : "interview",
     stream: true,
-    history: insights.slice(0, 1).reverse().flatMap(item => [
-      { role: "user", content: String(item.question || "").slice(0, 120) },
-      { role: "assistant", content: String(item.answer || "").slice(0, 120) },
+    history: insights.slice(0, 3).reverse().flatMap(item => [
+      { role: "user", content: String(item.question || "").slice(0, 140) },
+      { role: "assistant", content: String(item.answer || "").slice(0, 140) },
     ]),
+  };
   };
 
   const paintInsight = (insight, done = false) => {

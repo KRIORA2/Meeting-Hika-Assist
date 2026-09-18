@@ -2,6 +2,7 @@ import { motion } from "framer-motion";
 import { ChangeEvent, useRef, useState } from "react";
 import { FileText, Plus, Upload, ExternalLink, CheckCircle2, AlertCircle, Trash2 } from "lucide-react";
 import { getAccessToken } from "@/lib/auth";
+import { prepareInterviewPersona } from "@/lib/prepare-persona";
 
 type Source = {
   id: string;
@@ -68,6 +69,7 @@ export default function Documents() {
       setUploadedDocs((current) => {
         const next = current.filter((item) => item.id !== document.id);
         window.localStorage.setItem("hika-uploaded-documents", JSON.stringify(next));
+        if (next.length) void prepareInterviewPersona(next);
         return next;
       });
     } catch {
@@ -115,11 +117,10 @@ export default function Documents() {
 
       const body = await response.json() as { files?: { id: string; name: string }[] };
       const added = body.files ?? [];
-      setUploadedDocs((current) => {
-        const next = [...current, ...added];
-        window.localStorage.setItem("hika-uploaded-documents", JSON.stringify(next));
-        return next;
-      });
+      const nextDocs = [...uploadedDocs, ...added];
+      setUploadedDocs(nextDocs);
+      window.localStorage.setItem("hika-uploaded-documents", JSON.stringify(nextDocs));
+      void prepareInterviewPersona(nextDocs);
     } catch {
       setUploadError("The files could not be uploaded. Please try again.");
     } finally {
@@ -135,7 +136,7 @@ export default function Documents() {
         <div>
           <h1 className="text-xl font-semibold tracking-tight">Knowledge Sources</h1>
           <p className="text-sm text-muted-foreground mt-1">
-            Connect documents and tools so Hikanest can answer with your context
+            Connect a resume (and optional JD) so Hikanest can answer as you
           </p>
         </div>
 
@@ -147,8 +148,8 @@ export default function Documents() {
           className="border-2 border-dashed border-card-border rounded-xl p-10 text-center hover:border-primary/30 transition-colors cursor-pointer group"
         >
           <Upload size={24} className="mx-auto mb-3 text-muted-foreground/40 group-hover:text-primary/50 transition-colors" />
-          <p className="text-sm font-medium mb-1">Choose documents to use as context</p>
-          <p className="text-xs text-muted-foreground">PDF, DOCX, TXT, MD, JSON, CSV — 3 files, 10 MB each / 15 MB total</p>
+          <p className="text-sm font-medium mb-1">Upload resume and optional JD</p>
+          <p className="text-xs text-muted-foreground">Hika reads them once, learns your skills, then answers as you. PDF, DOCX, TXT, MD — 3 files, 10 MB each</p>
           <input
             ref={fileInputRef}
             type="file"
