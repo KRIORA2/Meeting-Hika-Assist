@@ -370,20 +370,23 @@ export async function loadUserMemory(userId: string): Promise<SessionMemoryItem[
   const data = snap.data() || {};
   const items = Array.isArray(data.items) ? data.items : [];
   return items
-    .map((item: unknown) => {
+    .map((item: unknown): SessionMemoryItem | null => {
       if (!item || typeof item !== "object") return null;
       const row = item as { question?: unknown; answer?: unknown; subjects?: unknown; at?: unknown };
       const question = String(row.question || "").trim();
       const answer = String(row.answer || "").trim();
       if (!question || !answer) return null;
+      const subjects = Array.isArray(row.subjects)
+        ? (row.subjects as unknown[]).map((subject) => String(subject)).slice(0, 4)
+        : [];
       return {
         question: question.slice(0, 180),
         answer: answer.slice(0, 280),
-        subjects: Array.isArray(row.subjects) ? row.subjects.map((subject) => String(subject)).slice(0, 4) : [],
+        subjects,
         at: typeof row.at === "number" ? row.at : Date.now(),
       };
     })
-    .filter((item): item is SessionMemoryItem => Boolean(item));
+    .filter((item: SessionMemoryItem | null): item is SessionMemoryItem => item !== null);
 }
 
 export async function saveUserMemory(userId: string, items: SessionMemoryItem[]) {
