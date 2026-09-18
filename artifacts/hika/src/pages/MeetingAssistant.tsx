@@ -1007,7 +1007,7 @@ function PiPContent({
       };
       return prev.length > 0 ? [draft] : [draft];
     });
-    const screenshot = needsVisualContext(latestText) ? captureScreenshot() : null;
+    const screenshot = null;
     const recentTranscript = transcriptRef.current
       ? `Transcript summary:\n${transcriptRef.current.slice(-1200)}`
       : "";
@@ -1026,23 +1026,23 @@ function PiPContent({
         ? `ANSWER THIS: "${question}"\n${profileContext}\n\n${recentTranscript}`
         : `${profileContext}\n${latestText.slice(-400)}`;
 
-    const historyForRequest = conversationHistoryRef.current.slice(-6).map((turn) => ({
+    const historyForRequest = conversationHistoryRef.current.slice(-2).map((turn) => ({
       role: turn.role,
-      content: String(turn.content || "").slice(0, turn.role === "assistant" ? 180 : 240),
+      content: String(turn.content || "").slice(0, turn.role === "assistant" ? 120 : 120),
     }));
     const userTurn = latestText.trim();
 
     try {
       const preferredModel = typeof window !== "undefined"
-        ? (window.localStorage.getItem("hika-ai-model") || "gpt-4.1")
-        : "gpt-4.1";
+        ? (window.localStorage.getItem("hika-ai-model") || "gpt-4o")
+        : "gpt-4o";
 
       const result = await analyzeContext.mutateAsync({
         data: {
           transcript: ctx,
           screenshotBase64: screenshot ?? undefined,
           sessionId: sessionIdRef.current ?? undefined,
-          uploadedDocs: uploadedDocsRef.current.slice(0, 3),
+          uploadedDocs: [],
           model: preferredModel,
           mode: sessionMode,
           history: historyForRequest,
@@ -1597,7 +1597,6 @@ function PiPContent({
     setMicActive(true);
     liveTranscriptRef.current = null;
     setLiveTranscript(null);
-    startLiveSpeech();
     try {
       const fallbackMicStream = await getOrCreateMicStream();
       const mimeType = MediaRecorder.isTypeSupported("audio/webm;codecs=opus") ? "audio/webm;codecs=opus"
@@ -1614,13 +1613,12 @@ function PiPContent({
 
       const recorder = new MediaRecorder(fallbackMicStream, { mimeType });
       recorderRef.current = recorder;
-      const speechOn = Boolean(speechRecRef.current);
 
       recorder.ondataavailable = (e) => {
         if (!e.data?.size) return;
         allChunksRef.current.push(e.data);
-        if (!micActiveRef.current || speechOn || liveTranscriptRef.current) return;
-        if (e.data.size < 900) return;
+        if (!micActiveRef.current) return;
+        if (e.data.size < 500) return;
         doInterimTranscription(e.data, mimeType);
       };
 
@@ -1683,7 +1681,7 @@ function PiPContent({
         stopLiveSpeech();
       };
 
-      recorder.start(speechOn ? 1000 : 400);
+      recorder.start(400);
     } catch (err) {
       const denied = err instanceof DOMException && (err.name === "NotAllowedError" || err.name === "PermissionDeniedError");
       setMicError(denied ? "Microphone access denied — allow mic permission in your browser settings." : "Could not access microphone or meeting audio.");

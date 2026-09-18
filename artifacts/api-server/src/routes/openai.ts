@@ -19,7 +19,7 @@ import {
   stripCodeFences,
   toSpokenAnswer,
 } from "../lib/answer-quality";
-import { CANDIDATE_IDENTITY, VOICE_EXAMPLES, matchingSubjects, subjectContext, detectSpeakMode, speakModeCue, answerFormatCue } from "../lib/interview-voice";
+import { CANDIDATE_IDENTITY, matchingSubjects, subjectContext, detectSpeakMode, speakModeCue, answerFormatCue } from "../lib/interview-voice";
 
 const router = Router();
 
@@ -36,7 +36,7 @@ async function takeCredits(req: Request, res: Response, amount: number) {
   }
   return result;
 }
-const DEFAULT_ANALYSIS_MODEL = process.env.OPENAI_MODEL || "gpt-4.1";
+const DEFAULT_ANALYSIS_MODEL = process.env.OPENAI_MODEL || "gpt-4o";
 const DEFAULT_TRANSCRIPTION_MODEL = process.env.OPENAI_TRANSCRIPTION_MODEL || "gpt-4o-transcribe";
 const DEFAULT_EMBEDDING_MODEL = process.env.OPENAI_EMBEDDING_MODEL || "text-embedding-3-small";
 const DEFAULT_REALTIME_MODEL = process.env.OPENAI_REALTIME_MODEL || "gpt-realtime";
@@ -359,7 +359,9 @@ function isLikelyCode(text: string): boolean {
 }
 
 function shouldUseDocumentGrounding(_text: string, docs?: Array<{ id?: string; name?: string }> | null): boolean {
-  return Boolean(docs?.length);
+  // Live answers must start in ~1s. PDF/docx parse before the first token is what
+  // made some questions take 3–4s. Resume text already lives in session guidance.
+  return false;
 }
 
 function detectRequestedLanguage(text: string): "sql" | "python" | "auto" {
@@ -574,7 +576,7 @@ async function retrieveRelevantResumeContext(args: {
 function buildConversationContext(history?: Array<{ role?: string; content?: string }> | null): string {
   if (!Array.isArray(history) || history.length === 0) return "";
 
-  const turns = history.slice(-6).map((turn) => {
+  const turns = history.slice(-2).map((turn) => {
     const role = turn.role === "assistant" ? "Assistant" : "User";
     const raw = normalizeContextText(turn.content || "");
     if (!raw) return null;
@@ -819,60 +821,32 @@ router.post("/openai/analyze", async (req, res) => {
       const docsLines: string[] = [];
       let resumeGrounding = "";
       try {
-        const docsToRead = uploadedDocs.slice(0, 3);
-        const docContextLines: string[] = [];
+        const docsToRead = uploadedDocs.slice(0, 2);
         for (const d of docsToRead) {
           const id = d.id;
           const name = d.name || id || "file";
-          docsLines.push(`- ${name}`);
           if (!id) continue;
           try {
             const stored = await readUserDocument(req.authUser!.id, id);
             if (!stored) continue;
             const content = (await extractDocumentTextFromBuffer(stored.name, stored.buffer)).replace(/\s+/g, " ").trim();
             if (!content) continue;
-            const clipped = content.slice(0, 7000);
-            docsLines.push(`Content (first 1200 chars):\n${clipped}`);
+            const clipped = content.slice(0, 1200);
+            docsLines.push(`- ${name}: ${clipped}`);
             if (!resumeGrounding && (resumeQuestion || isResumeLikeFile(name))) {
               resumeGrounding = buildResumeSignal(clipped) || clipped;
             }
-            const relevantSnippet = buildRelevantDocumentSnippet(content, explicitQuestion ?? transcript ?? "");
-            if (relevantSnippet) {
-              docContextLines.push(`Document: ${name}\nRelevant excerpt:\n${relevantSnippet}`);
-            }
           } catch { /* non-fatal */ }
-        }
-        if (docsLines.length) {
-          userContent.push({ type: "text", text: `User uploaded documents:\n${docsLines.join("\n")}` });
         }
         if (resumeGrounding) {
           userContent.push({
             type: "text",
-            text: `Primary resume context for candidate answers:\n${resumeGrounding}`,
+            text: `Primary resume context for candidate answers:\n${resumeGrounding.slice(0, 900)}`,
           });
-        }
-        if (docContextLines.length) {
-          userContent.push({ type: "text", text: `Relevant document context:\n${docContextLines.join("\n\n")}` });
+        } else if (docsLines.length) {
+          userContent.push({ type: "text", text: `User uploaded documents:\n${docsLines.join("\n")}` });
         }
       } catch { /* ignore upload doc read errors */ }
-    }
-
-    if (useGrounding && uploadedDocs && uploadedDocs.length > 0) {
-      try {
-        const semanticContext = await retrieveRelevantResumeContext({
-          uploadedDocs,
-          query: explicitQuestion ?? transcript ?? "",
-          userId: req.authUser!.id,
-        });
-        if (semanticContext) {
-          userContent.push({
-            type: "text",
-            text: `Semantic resume matches (embedding retrieval):\n${semanticContext}`,
-          });
-        }
-      } catch {
-        // non-fatal: continue without embedding context
-      }
     }
 
     const inferredQuestion = explicitQuestion ?? transcript ?? "";
@@ -897,54 +871,30 @@ router.post("/openai/analyze", async (req, res) => {
           role: "system",
           content: `You are Hika, a live interview copilot. The candidate glances at your text and speaks it. Never generate audio.
 ${CANDIDATE_IDENTITY}
-${VOICE_EXAMPLES}
 
-Session mode: ${mode}
-Detected question type: ${questionType}
-Speak mode: ${speakMode}
-${modeVoice}
+Session mode: ${mode}. Speak mode: ${speakMode}. ${modeVoice}
 ${codeVoice}
-${speakModeCue(speakMode)}
 ${answerFormatCue(inferredQuestion)}
-Detected subjects for this question: ${subjects.join(", ")}
-If the resume names an employer, project, or stack, use those exact names. Never invent the rest.
+Detected subjects: ${subjects.join(", ")}
+Use resume names if present. Never invent employers, incidents, or file paths.
 
-FROZEN TOPIC PACK (retrieved slices only — speak from these, do not recite as notes):
+FROZEN TOPIC PACK:
 ${subjectContext(inferredQuestion)}
 
-WHEN THEY ASK FOR A QUERY OR SCRIPT:
-- answer = employee explanation of what the query does and one production caveat
-- sections[0].content = the full real query/script
-- No <placeholders>, no YOUR_TOKEN, no truncated code, no s3a://my-bucket, no table1/table2
-- Azure file paths: abfss://bronze@examplestorage.dfs.core.windows.net/... and say it is an example unless the resume has a real path
-
-Never do this:
-- Headings like Contextual Explanation, Definition, Implementation, Best Practices
-- A bullet dump with no employee opener
-- Telegram notes like "Architecture Center is sources into a lake..."
-- Generic textbook answers with no "what I actually do"
-- REST / SCIM / requests.post unless they asked for that script
-- "I'm not aware", "Great question", "As an AI", "as of now", "Yeah,", "So basically"
-- Invent employers, projects, incidents, Slack alerts, metrics, or file paths
-
-If the transcript is not a clear English question, answer only: I didn't catch a clear English question. Press Listen again.
-
-Output JSON only. Put answer first so it can stream:
+First JSON key MUST be answer so it can stream. Keep the spoken answer tight enough to start in one second: complete process, no extra lecture.
 {
-  "answer": "Employee opener, then POINT-WISE • points or PARAGRAPH-WISE process as THIS question requires",
-  "question": "The speaker's English question, ≤60 chars",
-  "questionType": "${questionType}",
-  "keyPoints": ["process anchor 1", "process anchor 2", "process anchor 3"],
+  "answer": "Employee opener, then POINT-WISE • points or PARAGRAPH-WISE process",
+  "question": "≤60 chars",
+  "keyPoints": ["anchor 1", "anchor 2", "anchor 3"],
   "confidence": "high|medium|low",
   "sections": []
 }
-
-sections stay empty unless they explicitly asked for a query or script.`,
+sections empty unless they asked to write a query/script. Azure paths use abfss examples, never s3://my-bucket.`,
         },
         { role: "user", content: userContent },
       ],
       response_format: { type: "json_object" },
-      max_tokens: codeIntent ? 1600 : 900,
+      max_tokens: codeIntent ? 900 : 640,
       stream: true,
     });
 
@@ -954,7 +904,7 @@ sections stay empty unless they explicitly asked for a query or script.`,
       raw += chunk.choices[0]?.delta?.content ?? "";
       if (!streamToClient) continue;
       const partial = extractJsonStringField(raw, "answer");
-      if (partial.length < 24 || partial === lastPartial) continue;
+      if (partial.length < 8 || partial === lastPartial) continue;
       lastPartial = partial;
       res.write(`${JSON.stringify({ type: "delta", question: explicitQuestion || "", answer: partial })}\n`);
       if (typeof (res as Response & { flush?: () => void }).flush === "function") {
@@ -1013,18 +963,7 @@ sections stay empty unless they explicitly asked for a query or script.`,
             content: sanitizeProductionCode(firstCodeBlock.code),
           });
         } else {
-          const repaired = await runCodeRepairPass({
-            promptQuestion: inferredQuestion,
-            originalAnswer: answer || recommendedAnswer,
-            preferredLanguage,
-          });
-          if (repaired.sections.length) {
-            sections.splice(0, sections.length, ...repaired.sections.map((section) => ({
-              ...section,
-              content: sanitizeProductionCode(section.content),
-            })));
-          }
-          if (repaired.answer) answer = repaired.answer;
+          // Skip a second model pass so the answer can stay on screen in about a second.
         }
       }
       for (const section of sections) {

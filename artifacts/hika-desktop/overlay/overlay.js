@@ -64,7 +64,7 @@ const useRealtimeVoice = false;
 const realtimeMetrics = {};
 let realtimeDiagnostics = false;
 let selectedSessionMode = "interview";
-let selectedModel = "gpt-4.1";
+let selectedModel = "gpt-4o";
 let autoAnswerEnabled = true;
 let saveTranscriptEnabled = true;
 let remainingCredits = null;
@@ -1133,7 +1133,7 @@ function createSourceRecorder(stream, sourceId) {
   if (!hasLiveAudio(stream)) return null;
   const track = stream.getAudioTracks()[0];
   track.enabled = true;
-  const recordStream = new MediaStream([typeof track.clone === "function" ? track.clone() : track]);
+  const recordStream = new MediaStream([track]);
   let recorder;
   try {
     recorder = new MediaRecorder(recordStream, mimeType ? { mimeType, audioBitsPerSecond: 128000 } : undefined);
@@ -1143,15 +1143,16 @@ function createSourceRecorder(stream, sourceId) {
   const chunks = [];
   recorder.ondataavailable = (event) => {
     if (event.data && event.data.size > 0) chunks.push(event.data);
-    if (!isRecording || !event.data || event.data.size < 600) return;
-    if (liveSpeechActive && String(liveTxText.value || "").trim()) return;
-    void ingestLiveSlice(event.data, sourceId);
+    if (isRecording && event.data && event.data.size >= 500) {
+      void ingestLiveSlice(event.data, sourceId);
+    }
   };
   try {
-    recorder.start(liveSpeechActive ? 1000 : 400);
+    recorder.start(400);
   } catch {
     recorder.start();
   }
+  if (recorder.state !== "recording") return null;
   return { recorder, chunks, stream: recordStream, sourceId };
 }
 
@@ -1176,7 +1177,15 @@ function stopSourceRecorder(handle) {
       return;
     }
     const finish = () => {
-      try { handle.stream?.getTracks?.().forEach((track) => track.stop()); } catch { /* ignore */ }
+      try {
+        const warmTracks = [
+          ...(micStream?.getAudioTracks?.() || []),
+          ...(systemStream?.getAudioTracks?.() || []),
+        ];
+        handle.stream?.getTracks?.().forEach((track) => {
+          if (!warmTracks.includes(track)) track.stop();
+        });
+      } catch { /* ignore */ }
       resolve(new Blob(handle.chunks || [], { type: mimeType }));
     };
     if (handle.recorder.state === "inactive") {
@@ -1196,7 +1205,15 @@ function discardSourceRecorder(handle) {
   try {
     if (handle.recorder.state !== "inactive") handle.recorder.stop();
   } catch { /* ignore */ }
-  try { handle.stream?.getTracks?.().forEach((track) => track.stop()); } catch { /* ignore */ }
+  try {
+    const warmTracks = [
+      ...(micStream?.getAudioTracks?.() || []),
+      ...(systemStream?.getAudioTracks?.() || []),
+    ];
+    handle.stream?.getTracks?.().forEach((track) => {
+      if (!warmTracks.includes(track)) track.stop();
+    });
+  } catch { /* ignore */ }
 }
 
 async function startRecording() {
@@ -1204,6 +1221,7 @@ async function startRecording() {
   const epoch = sessionEpoch;
   try {
     captureGeneration += 1;
+    const generation = captureGeneration;
     pendingAnalyzeOnStop = false;
     answerOnStopLock = false;
     listenPeakLevel = 0;
@@ -1214,6 +1232,7 @@ async function startRecording() {
       clearTimeout(listenFinalizeTimer);
       listenFinalizeTimer = null;
     }
+    stopLiveSpeech();
     isRecording = true;
     setListeningUI(true);
     recIndicator.hidden = false;
@@ -1225,34 +1244,69 @@ async function startRecording() {
     statusDot.textContent = "● Listening";
     statusDot.className = "status-dot rec";
     setLiveBadge("● LIVE", "live");
-    startLiveSpeech();
 
     const sources = await warmAudioPipeline();
-    if (!liveSpeechActive) startLiveSpeech();
     if (epoch !== sessionEpoch || sessionEnding || !sessionId) {
-      stopLiveSpeech();
       isRecording = false;
       setListeningUI(false);
       return;
     }
     micCapture = createSourceRecorder(sources.mic, "mic");
     meetingCapture = createSourceRecorder(sources.meeting, "meeting");
-    if (!micCapture && !meetingCapture) throw new Error("No active microphone track was found.");
+    if (!micCapture && !meetingCapture) {
+      throw new Error("The microphone did not start. Allow mic access, then press Listen again.");
+    }
     warnedSilentMic = false;
     silentListenFrames = 0;
     const captureName = sources.meeting && sources.mic ? "meeting or mic" : (sources.mic ? "your mic" : "meeting");
     statusDot.textContent = `● Listening · ${captureName}`;
     setLiveBadge(`● LIVE · ${captureName}`, "live");
+    watchCaptureHealth(generation);
   } catch (err) {
     const message = err instanceof Error ? err.message : "Audio capture failed.";
-    alert(`Could not start listening.\n\n${message}\n\nAllow the microphone. Speak a full English question, then Stop.`);
-    statusDot.textContent = "● Mic unavailable";
-    statusDot.className = "status-dot";
-    stopLiveSpeech();
-    isRecording = false;
-    setListeningUI(false);
+    failListen(`Could not start the microphone.\n\n${message}\n\nAllow microphone access and try Listen again.`);
     console.error(err);
   }
+}
+
+function failListen(message) {
+  isRecording = false;
+  pendingAnalyzeOnStop = false;
+  discardSourceRecorder(micCapture);
+  discardSourceRecorder(meetingCapture);
+  micCapture = null;
+  meetingCapture = null;
+  stopLiveSpeech();
+  setListeningUI(false);
+  recIndicator.hidden = true;
+  statusDot.textContent = "● Audio error";
+  statusDot.className = "status-dot";
+  setLiveBadge("Audio error");
+  alert(message);
+  showToast("Microphone did not capture audio.");
+}
+
+function watchCaptureHealth(generation) {
+  const started = Date.now();
+  const tick = () => {
+    if (!isRecording || generation !== captureGeneration || sessionEnding) return;
+    const recording = [micCapture, meetingCapture].some((handle) => handle?.recorder?.state === "recording");
+    const live = hasLiveAudio(micStream) || hasLiveAudio(systemStream);
+    if (!live || !recording) {
+      failListen("The microphone stopped right after Listen.\n\nAllow mic access, pick your microphone in the source list, then press Listen again.");
+      return;
+    }
+    if (Date.now() - started < 1600) {
+      setTimeout(tick, 250);
+      return;
+    }
+    const gotBytes = (micCapture?.chunks || []).reduce((sum, chunk) => sum + (chunk.size || 0), 0)
+      + (meetingCapture?.chunks || []).reduce((sum, chunk) => sum + (chunk.size || 0), 0);
+    if (listenPeakLevel < 0.016 && gotBytes < 400 && !String(liveTxText.value || "").trim()) {
+      failListen("Hikanest is not hearing any audio.\n\nSpeak into the mic, or keep the meeting playing on this PC.\nIf you are testing, switch the source to your microphone and press Listen again.");
+    }
+  };
+  setTimeout(tick, 400);
 }
 
 async function stopRecording() {
@@ -1756,7 +1810,7 @@ async function getMeetingAudioStream() {
     systemStream = null;
   }
 
-  const stream = await captureDesktopLoopback();
+  const stream = await captureDesktopLoopback() || await captureSpeakerMix();
   if (!stream || !hasLiveAudio(stream)) return null;
 
   const track = stream.getAudioTracks()[0];
@@ -1789,11 +1843,14 @@ function connectMeter(stream, analyserTarget) {
 }
 
 async function warmAudioPipeline() {
-  if ((hasLiveAudio(micStream) || hasLiveAudio(systemStream)) && audioContext && audioContext.state !== "closed") {
-    if (audioContext.state === "suspended") await audioContext.resume();
-    if (!meterFrame) startMeters();
-    return { meeting: systemStream, mic: micStream };
+  if (hasLiveAudio(micStream) || hasLiveAudio(systemStream)) {
+    if (audioContext && audioContext.state === "suspended") await audioContext.resume();
+    if (audioContext && audioContext.state !== "closed") {
+      if (!meterFrame) startMeters();
+      return { meeting: hasLiveAudio(systemStream) ? systemStream : null, mic: hasLiveAudio(micStream) ? micStream : null };
+    }
   }
+  if (!(hasLiveAudio(micStream) || hasLiveAudio(systemStream))) warmPipelinePromise = null;
   if (warmPipelinePromise) return warmPipelinePromise;
   warmPipelinePromise = (async () => {
     const [meeting, mic] = await Promise.all([
@@ -1906,11 +1963,6 @@ async function analyze(utterance) {
   isAnalyzing = true;
   setAnalyzing(true);
 
-  let screenshotBase64 = null;
-  if (window.hikaElectron && needsVisualContext(utterance)) {
-    screenshotBase64 = await window.hikaElectron.captureScreen().catch(() => null);
-  }
-
   const codeRequest = /\b(write|show me|give me|paste)\b.{0,40}\b(code|sql|query|script|pyspark|python)\b|\b(executable code|sql query to|pyspark code|python script|write a pyspark)\b/i.test(utterance)
     && !/\b(what do you mean|what is|what are|explain|define)\b/i.test(utterance);
   const context = [
@@ -1924,14 +1976,12 @@ async function analyze(utterance) {
   const body = {
     transcript: context,
     sessionId,
-    screenshotBase64: screenshotBase64 || undefined,
-    uploadedDocs: uploadedDocs.slice(0, 3).map(d => ({ id: d.id, name: d.name })),
-    model: selectedModel,
+    model: selectedModel || "gpt-4o",
     mode: selectedSessionMode === "call" ? "meeting" : "interview",
     stream: true,
-    history: insights.slice(0, 4).reverse().flatMap(item => [
-      { role: "user", content: String(item.question || "").slice(0, 240) },
-      { role: "assistant", content: String(item.answer || "").slice(0, 180) },
+    history: insights.slice(0, 1).reverse().flatMap(item => [
+      { role: "user", content: String(item.question || "").slice(0, 120) },
+      { role: "assistant", content: String(item.answer || "").slice(0, 120) },
     ]),
   };
 

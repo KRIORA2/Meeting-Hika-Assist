@@ -76,7 +76,7 @@ function fillExtras(ids: string[]): string[] {
   return filled.slice(0, 3);
 }
 
-const CONTEXT_CHAR_BUDGET = 2200;
+const CONTEXT_CHAR_BUDGET = 900;
 
 export function subjectContext(question: string): string {
   const ids = fillExtras(matchingSubjects(question));
