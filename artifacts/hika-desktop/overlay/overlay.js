@@ -186,6 +186,8 @@ const updateNowBtn = $("update-now-btn");
 
 // ── Init ──────────────────────────────────────────────────────────────────────
 async function init() {
+  const failsafe = setTimeout(finishSplash, 1500);
+  try {
   if (window.hikaElectron) {
     apiUrl = await window.hikaElectron.getApiUrl();
     webAppUrl = await window.hikaElectron.getWebAppUrl();
@@ -209,9 +211,9 @@ async function init() {
     if (MediaRecorder.isTypeSupported(mt)) { mimeType = mt; break; }
   }
 
-  // Populate mic sources
-  await loadMicSources();
-  micSource.addEventListener("change", () => {
+  // Populate mic sources after the UI is up so a Windows mic prompt cannot freeze the logo.
+  void loadMicSources().catch(() => {});
+  micSource?.addEventListener("change", () => {
     selectedDeviceId = micSource.value || "meeting";
     persistMicDevice(selectedDeviceId);
     setListeningUI(isRecording);
@@ -229,7 +231,7 @@ async function init() {
   });
 
   // Event listeners
-  startBtn.addEventListener("click", handleStart);
+  startBtn?.addEventListener("click", handleStart);
   setupStartBtn?.addEventListener("click", handleStart);
   $("setup-btn")?.addEventListener("click", showSetupScreen);
   $("setup-back-btn")?.addEventListener("click", showStartScreen);
@@ -351,11 +353,7 @@ async function init() {
   clickthroughBtn.addEventListener("click", toggleClickThrough);
   updateClickThroughUI();
 
-  setTimeout(() => {
-    splashScreen?.classList.add("hidden");
-    if (authSession) showSetupScreen();
-    else showGoogleSigninScreen();
-  }, 3000);
+  finishSplash();
 
   // Resize handle
   initResize();
@@ -386,6 +384,12 @@ async function init() {
       void toggleRecording();
     }
   });
+  } catch (err) {
+    console.error("Hikanest failed to start", err);
+  } finally {
+    clearTimeout(failsafe);
+    finishSplash();
+  }
 }
 
 function closeAccountMenu() {
@@ -671,6 +675,7 @@ async function loadMicSources() {
 
     const devices = await navigator.mediaDevices.enumerateDevices();
     const mics = devices.filter((device) => device.kind === "audioinput");
+    if (!micSource) return;
 
     micSource.innerHTML = "";
     const meetingOpt = document.createElement("option");
@@ -2020,7 +2025,6 @@ async function analyze(utterance) {
       { role: "assistant", content: String(item.answer || "").slice(0, 140) },
     ]),
   };
-  };
 
   const paintInsight = (insight, done = false) => {
     const next = {
@@ -2574,6 +2578,14 @@ function updateLoginStatus() {
   if (accountMenuEmail) accountMenuEmail.textContent = authSession?.email || "Not signed in";
 }
 
+function finishSplash() {
+  if (finishSplash.done) return;
+  finishSplash.done = true;
+  splashScreen?.classList.add("hidden");
+  if (authSession) showSetupScreen();
+  else showGoogleSigninScreen();
+}
+
 function showStartScreen() {
   if (googleSigninScreen) googleSigninScreen.style.display = "none";
   if (setupScreen) setupScreen.style.display = "none";
@@ -2625,7 +2637,10 @@ async function completeDesktopHandoff(code) {
 }
 
 // ── Start ──────────────────────────────────────────────────────────────────────
-init();
+init().catch((err) => {
+  console.error("Hikanest failed to start", err);
+  finishSplash();
+});
 
 window.addEventListener("beforeunload", () => {
   stopAudioPipeline();
