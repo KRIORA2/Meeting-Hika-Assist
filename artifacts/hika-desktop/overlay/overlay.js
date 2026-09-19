@@ -2330,6 +2330,10 @@ async function analyze(utterance) {
       showToast("Could not get an answer. The AI provider is out of credits — not a connection issue.");
     } else if (status === 401) {
       showToast("Could not get an answer. Sign-in expired. Please sign in again.");
+    } else if (status === 403) {
+      showToast(`Could not get an answer. ${message.slice(0, 100) || "This API key cannot use the selected model."}`);
+    } else if (status === 400) {
+      showToast(`Could not get an answer. Invalid AI request: ${message.slice(0, 100) || "check model configuration."}`);
     } else if (status) {
       showToast(`Could not get an answer. ${status}: ${message.slice(0, 80) || "request failed"}`);
     } else {
@@ -2401,7 +2405,8 @@ function attachAnalyzeStreamError(event) {
   const error = new Error(event.error || "Analyze failed");
   error.status = Number(event.status) || 500;
   error.code = event.code || event.errorType || "";
-  error.requestId = event.requestId || "";
+  error.param = event.param || "";
+  error.requestId = event.requestId || event.openaiRequestId || "";
   error.openAiStarted = Boolean(event.openAiStarted);
   error.firstTokenArrived = Boolean(event.firstTokenArrived);
   error.streamingStarted = true;

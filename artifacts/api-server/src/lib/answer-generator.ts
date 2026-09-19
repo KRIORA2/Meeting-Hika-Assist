@@ -19,7 +19,7 @@ import type { PersonaCard } from "./persona";
 import type { QuestionAnalysis } from "./question-analyzer";
 import { answerFormatCue } from "./interview-voice";
 import { normalizeSpokenQuestion } from "./question-finalizer";
-import { buildAnswerChatParams, resolveAnswerModel } from "./answer-chat";
+import { ANSWER_API_METHOD, annotateOpenAiError, buildAnswerChatParams, resolveAnswerModel } from "./answer-chat";
 
 export type InterviewUserPart =
   | { type: "text"; text: string }
@@ -274,17 +274,12 @@ export async function generateInterviewAnswer(args: {
         }
       }
     } catch (err) {
-      const diagnostic = err as {
-        openAiStarted?: boolean;
-        firstTokenArrived?: boolean;
-        openAiCompleted?: boolean;
-        openAiRequestMs?: number;
-      };
-      diagnostic.openAiStarted = true;
-      diagnostic.firstTokenArrived = firstTokenMs != null;
-      diagnostic.openAiCompleted = false;
-      diagnostic.openAiRequestMs = Date.now() - openAiStartedAt;
-      throw err;
+      throw annotateOpenAiError(err, {
+        model: resolveAnswerModel(args.model),
+        method: ANSWER_API_METHOD,
+        firstTokenArrived: firstTokenMs != null,
+        openAiRequestMs: Date.now() - openAiStartedAt,
+      });
     }
     let parsed: {
       answer?: string;

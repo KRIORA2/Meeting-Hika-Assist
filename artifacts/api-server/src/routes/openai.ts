@@ -14,7 +14,7 @@ import {
   looksLikeUsEnglish,
 } from "../lib/answer-quality";
 import { CANDIDATE_IDENTITY, detectSpeakMode, speakModeCue, subjectContext } from "../lib/interview-voice";
-import { buildAnswerChatParams, FALLBACK_ANSWER_MODEL, resolveAnswerModel } from "../lib/answer-chat";
+import { ANSWER_API_METHOD, buildAnswerChatParams, extractUpstreamError, FALLBACK_ANSWER_MODEL, resolveAnswerModel } from "../lib/answer-chat";
 
 const router = Router();
 
@@ -37,13 +37,28 @@ function publicAnalyzeError(err: unknown): {
   type: string;
   status: number;
   code: string;
+  param: string;
+  openaiRequestId: string;
+  model: string;
+  method: string;
 } {
-  const anyErr = err as { status?: number; code?: string; message?: string; name?: string };
-  const status = Number(anyErr?.status) || 500;
-  const code = String(anyErr?.code || "");
-  const message = String(anyErr?.message || "");
-  if (status === 429 || /insufficient_quota|credit_balance_exhausted|credits remaining|quota/i.test(`${code} ${message}`)) {
+  const anyErr = err as { name?: string; model?: string; method?: string };
+  const upstream = extractUpstreamError(err);
+  const status = upstream.status || 500;
+  const code = upstream.code;
+  const message = upstream.message;
+  const base = {
+    param: upstream.param,
+    openaiRequestId: upstream.requestID,
+    model: String(anyErr?.model || process.env.OPENAI_MODEL || FALLBACK_ANSWER_MODEL),
+    method: String(anyErr?.method || ANSWER_API_METHOD),
+  };
+  if (status === 429 && /rate_limit|rate limit/i.test(`${code} ${upstream.type} ${message}`)) {
+    return { ...base, type: "provider_rate_limit", status: 429, code: code || "rate_limit", error: "The AI provider is rate-limiting requests. Try again in a moment." };
+  }
+  if (status === 429 || /insufficient_quota|credit_balance_exhausted|credits remaining|quota/i.test(`${code} ${upstream.type} ${message}`)) {
     return {
+      ...base,
       type: "provider_quota",
       status: 429,
       code: code || "insufficient_quota",
@@ -51,15 +66,30 @@ function publicAnalyzeError(err: unknown): {
     };
   }
   if (anyErr?.name === "AbortError" || /aborted/i.test(message)) {
-    return { type: "aborted", status: 499, code: "aborted", error: "The answer request was cancelled." };
+    return { ...base, type: "aborted", status: 499, code: "aborted", error: "The answer request was cancelled." };
   }
   if (status === 401 || /invalid api key|incorrect api key/i.test(message)) {
-    return { type: "provider_auth", status: 401, code: code || "unauthorized", error: "The AI provider rejected the server key." };
+    return { ...base, type: "provider_auth", status: 401, code: code || "unauthorized", error: "The AI provider rejected the server key." };
+  }
+  if (status === 403 || /model_not_found|does not have access/i.test(`${code} ${message}`)) {
+    return { ...base, type: "provider_forbidden", status: 403, code: code || "forbidden", error: message.slice(0, 180) || "This API key cannot use the selected model." };
+  }
+  if (status === 400 || /unsupported parameter|invalid_request|unknown parameter|invalid model/i.test(`${code} ${upstream.type} ${message}`)) {
+    return { ...base, type: "invalid_request", status: 400, code: code || "invalid_request", error: message.slice(0, 180) || "Invalid AI request configuration." };
   }
   if (/ENOTFOUND|ETIMEDOUT|ECONNRESET|fetch failed|network/i.test(`${code} ${message}`)) {
-    return { type: "upstream_network", status: 502, code: code || "upstream_network", error: "Could not reach the AI provider." };
+    return { ...base, type: "upstream_network", status: 502, code: code || "upstream_network", error: "Could not reach the AI provider." };
   }
-  return { type: "analyze_failed", status: status >= 400 ? status : 500, code, error: "Failed to analyze context" };
+  if (status === 502 || status === 503 || status === 504) {
+    return { ...base, type: "provider_unavailable", status, code: code || "provider_unavailable", error: message.slice(0, 180) || "The AI provider is unavailable." };
+  }
+  return {
+    ...base,
+    type: "analyze_failed",
+    status: status >= 400 ? status : 500,
+    code,
+    error: message.slice(0, 180) || "Failed to analyze context",
+  };
 }
 const DEFAULT_ANALYSIS_MODEL = process.env.OPENAI_MODEL || FALLBACK_ANSWER_MODEL;
 const DEFAULT_TRANSCRIPTION_MODEL = process.env.OPENAI_TRANSCRIPTION_MODEL || "gpt-4o-transcribe";
@@ -980,6 +1010,10 @@ router.post("/openai/analyze", async (req, res) => {
       type: publicErr.type,
       status: publicErr.status,
       code: publicErr.code,
+      param: publicErr.param || null,
+      openaiRequestId: publicErr.openaiRequestId || null,
+      model: publicErr.model,
+      method: publicErr.method,
       elapsedMs,
       headersSent: res.headersSent,
       streamToClient,
@@ -996,6 +1030,10 @@ router.post("/openai/analyze", async (req, res) => {
         status: publicErr.status,
         code: publicErr.code,
         errorType: publicErr.type,
+        param: publicErr.param || undefined,
+        openaiRequestId: publicErr.openaiRequestId || undefined,
+        model: publicErr.model,
+        method: publicErr.method,
         requestId: analyzeRequestId,
         elapsedMs,
         openAiStarted: Boolean(anyErr?.openAiStarted),
@@ -1010,6 +1048,10 @@ router.post("/openai/analyze", async (req, res) => {
       status: publicErr.status,
       code: publicErr.code,
       errorType: publicErr.type,
+      param: publicErr.param || undefined,
+      openaiRequestId: publicErr.openaiRequestId || undefined,
+      model: publicErr.model,
+      method: publicErr.method,
       requestId: analyzeRequestId,
       elapsedMs,
     });
