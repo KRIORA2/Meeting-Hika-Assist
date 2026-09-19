@@ -4,14 +4,7 @@ import {
   analyzeQuestion,
   type QuestionAnalysis,
 } from "./question-analyzer";
-import {
-  listRecentUserInsights,
-  listSessionInsights,
-  listUserSessions,
-  loadUserMemory,
-  saveUserMemory,
-  type SessionMemoryItem,
-} from "./store";
+import type { SessionMemoryItem } from "./store";
 
 const STOP = new Set([
   "the", "and", "for", "you", "your", "that", "this", "with", "from", "what", "how", "why",
@@ -123,6 +116,7 @@ function mergeItems(current: SessionMemoryItem[], next: SessionMemoryItem): Sess
 async function persist(userId: string, items: SessionMemoryItem[]) {
   cache.set(userId, items);
   if (process.env.HIKA_SKIP_MEMORY_PERSIST === "1") return;
+  const { saveUserMemory } = await import("./store");
   await saveUserMemory(userId, items).catch(() => undefined);
 }
 
@@ -137,6 +131,13 @@ export async function warmSessionMemory(userId: string): Promise<SessionMemoryIt
   if (pending) return pending;
 
   const work = (async () => {
+    const {
+      loadUserMemory,
+      listRecentUserInsights,
+      listUserSessions,
+      listSessionInsights,
+      saveUserMemory,
+    } = await import("./store");
     let items = await loadUserMemory(userId);
     if (!items.length) {
       const insights = await listRecentUserInsights(userId, 80).catch(() => []);
