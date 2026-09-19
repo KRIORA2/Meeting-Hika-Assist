@@ -67,6 +67,8 @@ const realtimeMetrics = {};
 let realtimeDiagnostics = false;
 let selectedSessionMode = "interview";
 let selectedModel = "gpt-5.6-sol";
+let hostedApiSupportsGpt5 = null;
+let hostedApiProbe = null;
 let autoAnswerEnabled = true;
 let saveTranscriptEnabled = true;
 let remainingCredits = null;
@@ -195,6 +197,7 @@ async function init() {
   if (window.hikaElectron) {
     apiUrl = await window.hikaElectron.getApiUrl();
     webAppUrl = await window.hikaElectron.getWebAppUrl();
+    void detectHostedAnswerApi();
     realtimeDiagnostics = await window.hikaElectron.isDevelopment();
     window.hikaElectron.pin();
     const installedVersion = await window.hikaElectron.getAppVersion();
@@ -2217,8 +2220,30 @@ async function transcribeBlob(blob, { preview = false } = {}) {
 }
 
 // ── AI Analysis ───────────────────────────────────────────────────────────────
+function detectHostedAnswerApi() {
+  if (!hostedApiProbe) {
+    hostedApiProbe = (async () => {
+      try {
+        const res = await fetch(apiUrl + "/api/billing/plans");
+        hostedApiSupportsGpt5 = res.ok;
+      } catch {
+        hostedApiSupportsGpt5 = false;
+      }
+      return hostedApiSupportsGpt5;
+    })();
+  }
+  return hostedApiProbe;
+}
+
+function resolveAnalyzeModel() {
+  const model = selectedModel || "gpt-5.6-sol";
+  if (/^gpt-5/i.test(model) && hostedApiSupportsGpt5 === false) return "gpt-4.1";
+  return model;
+}
+
 async function analyze(utterance) {
   if (!utterance || isAnalyzing || sessionEnding || !sessionId) return false;
+  await detectHostedAnswerApi();
   if (isHallucinatedTranscript(utterance)) {
     showToast("I caught speech, but it didn't sound like a clear English question.", "warn");
     return false;
@@ -2248,7 +2273,7 @@ async function analyze(utterance) {
     transcript: context,
     sessionId,
     uploadedDocs: uploadedDocs.slice(0, 3).map((doc) => ({ id: doc.id, name: doc.name })),
-    model: selectedModel || "gpt-5.6-sol",
+    model: resolveAnalyzeModel(),
     mode: selectedSessionMode === "call" ? "meeting" : "interview",
     stream: true,
     history: insights.slice(0, 3).reverse().flatMap(item => [
