@@ -1449,7 +1449,9 @@ async function startRecording() {
     silentListenFrames = 0;
     listenState = "listening";
     setListenPhase("listening");
-    const captureName = sources.meeting && sources.mic ? "meeting or mic" : (sources.mic ? "your mic" : "meeting");
+    const captureName = !isMeetingCapture()
+      ? "your mic"
+      : (sources.meeting && sources.mic ? "meeting or mic" : (sources.mic ? "your mic" : "meeting"));
     statusDot.textContent = `● Listening · ${captureName}`;
     setLiveBadge(`● LIVE · ${captureName}`, "live");
     startLiveSpeech();
@@ -1492,15 +1494,7 @@ function watchCaptureHealth(generation) {
       failListen("The microphone stopped right after Listen.\n\nAllow mic access, pick your microphone in the source list, then press Listen again.");
       return;
     }
-    if (Date.now() - started < 1600) {
-      setTimeout(tick, 250);
-      return;
-    }
-    const gotBytes = (micCapture?.chunks || []).reduce((sum, chunk) => sum + (chunk.size || 0), 0)
-      + (meetingCapture?.chunks || []).reduce((sum, chunk) => sum + (chunk.size || 0), 0);
-    if (listenPeakLevel < 0.016 && gotBytes < 400 && !String(liveTxText.value || "").trim()) {
-      failListen("Hikanest is not hearing any audio.\n\nSpeak into the mic, or keep the meeting playing on this PC.\nIf you are testing, switch the source to your microphone and press Listen again.");
-    }
+    if (Date.now() - started < 4000) setTimeout(tick, 400);
   };
   setTimeout(tick, 400);
 }
@@ -1906,8 +1900,11 @@ function startMeters() {
       }
       if (!warnedSilentMic && silentListenFrames > 180) {
         warnedSilentMic = true;
-        showToast("Listening. Speak, or keep the meeting playing.");
-        statusDot.textContent = "● Mic silent";
+        const quietHint = isMeetingCapture()
+          ? "No meeting audio yet. You can still speak into your mic, then Stop."
+          : "No speech yet. Speak into your microphone, then press Stop.";
+        showToast(quietHint, "info");
+        statusDot.textContent = isMeetingCapture() ? "● Listening · quiet" : "● Mic quiet";
       }
     }
     meterFrame = requestAnimationFrame(tick);
