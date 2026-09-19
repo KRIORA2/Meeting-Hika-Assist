@@ -14,6 +14,7 @@ import {
   stripCodeFences,
   toSpokenAnswer,
 } from "./answer-quality";
+import { defaultCodingSpec, formatCodingAnswer, hasExecutableCode } from "./coding-intelligence";
 import type { PersonaCard } from "./persona";
 import type { QuestionAnalysis } from "./question-analyzer";
 import { answerFormatCue } from "./interview-voice";
@@ -324,12 +325,27 @@ export async function generateInterviewAnswer(args: {
       section.content = sanitizeProductionCode(section.content);
     }
     if (live) {
-      const spoken = toSpokenAnswer(
-        (looksLikeCodeDump(answer) ? parsedRecommended : answer) || parsedRecommended,
-        askedForPoints,
-        { keepCode: true },
-      );
-      answer = spoken || "I'd run this in Spark. It does the job in one pass, and I'd still check format and schema before I trust the load.";
+      const spec = analysis.coding || defaultCodingSpec(detectRequestedLanguage(question) === "sql" ? "sql" : "python");
+      const lang = sections[0]?.language || spec.language || preferredLanguage || "sql";
+      const sectionBody = (sections.find((section) => section.content)?.content || "")
+        .replace(/^```[a-zA-Z0-9_-]*\n?/, "")
+        .replace(/```$/, "")
+        .trim();
+      const prose = [parsedAnswer, parsedRecommended]
+        .map((text) => String(text || "").trim())
+        .find((text) => text && !/fenced complete code first|complete executable snippet/i.test(text) && !hasExecutableCode(text)) || "";
+      const codeSource = hasExecutableCode(parsedAnswer)
+        ? parsedAnswer
+        : hasExecutableCode(parsedRecommended)
+          ? parsedRecommended
+          : sectionBody
+            ? `\`\`\`${lang}\n${sectionBody}\n\`\`\`${prose ? `\n\n${prose}` : ""}`
+            : parsedAnswer || rawAnswer;
+      for (const section of sections) {
+        const inner = section.content.replace(/^```[a-zA-Z0-9_-]*\n?/, "").replace(/```$/, "").trim();
+        section.content = inner;
+      }
+      answer = formatCodingAnswer(codeSource, spec);
     }
   } else if (live) {
     const source = [parsedRecommended, answer].find((text) => text && !looksLikeCodeDump(text) && !/SELECT \* FROM table1/i.test(text || "")) || "";

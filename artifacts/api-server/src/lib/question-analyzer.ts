@@ -12,6 +12,7 @@
  */
 
 import { isCodeIntent } from "./answer-quality";
+import { extractCodingSpec, isCodingQuestion, type CodingSpec } from "./coding-intelligence";
 import { scoredSubjects } from "./subject-docs";
 import {
   FILLER,
@@ -56,7 +57,7 @@ export type InterviewIntent =
   | "clarification"
   | "example";
 
-export type FineIntent = InterviewIntent | "sql_coding" | "pyspark_coding" | "challenge" | "governance" | "observability";
+export type FineIntent = InterviewIntent | "sql_coding" | "pyspark_coding" | "python_coding" | "challenge" | "governance" | "observability";
 
 export type QuestionRelation =
   | "new_topic"
@@ -101,6 +102,8 @@ export type QuestionAnalysis = {
   conceptsToAvoidRepeating: string[];
   confidence: number;
   matchedRule: string;
+  isCodingQuestion: boolean;
+  coding: CodingSpec | null;
 };
 
 const TECH_ALIASES: Array<{ id: string; pattern: RegExp; label: string }> = [
@@ -185,6 +188,7 @@ const INTENT_RULES: IntentRule[] = [
   { name: "api_instead", intent: "scenario", confidence: 0.85, test: (t) => /(if the source was an api|api instead|source was an api)/i.test(t) },
   { name: "implement_paraphrase", intent: "how_to_implement", confidence: 0.88, test: (t) => /(take me through the implementation|walk me through (the |how (you|'d|you would) )implement|how (you|'d) (actually )?build)/i.test(t) },
   { name: "implement_verb", intent: "how_to_implement", confidence: 0.94, test: (t) => /(how (do|would|can) (you |we )?implement)/i.test(t) },
+  { name: "implement_bare", intent: "how_to_implement", confidence: 0.78, test: (t) => /^implement\b/i.test(t) && !isCodeIntent(t) },
   { name: "design", intent: "how_to_design", confidence: 0.9, test: (t) => /(how (do|would|can) (you |we )?design)/i.test(t) },
   { name: "scalability", intent: "scalability", confidence: 0.9, test: (t) => /(10\s?tb|very large|at scale|scale out|same design at|would (that|it|your approach) (still )?work)/i.test(t) },
   { name: "approach", intent: "how_to_handle", confidence: 0.84, test: (t) => /(your approach|approach to|make (that|it) reliable)/i.test(t) },
@@ -204,6 +208,7 @@ const INTENT_RULES: IntentRule[] = [
   { name: "scenario", intent: "scenario", confidence: 0.84, test: (t) => /(what would you do|suppose |scenario|if we (need|had)|what if )/i.test(t) },
   { name: "challenge_generic", intent: "scenario", confidence: 0.8, test: (t) => /^(are you sure|wouldn'?t that|doesn'?t that|why not just|wouldn'?t \w+ (fail|work|break|scale))\b/i.test(t) },
   { name: "clarification", intent: "clarification", confidence: 0.86, test: (t) => /(what do you mean|clarify|in other words)/i.test(t) },
+  { name: "how_does_work", intent: "how_to_implement", confidence: 0.8, test: (t) => /how does .{0,80} work/i.test(t) },
   { name: "definition", intent: "definition", confidence: 0.8, test: (t) => /(what is|what are|what's|explain|define )/i.test(t) },
   { name: "generic_how", intent: "how_to_implement", confidence: 0.62, test: (t) => /(how (do|would|can) (you|we))/i.test(t) },
 ];
@@ -342,10 +347,10 @@ export function questionFingerprint(
   topic: string,
   intent: InterviewIntent,
   technologies: string[] = [],
-  extra: { subTopic?: string; scenario?: string } = {},
+  extra: { subTopic?: string; scenario?: string; codingOp?: string } = {},
 ): string {
   const tech = technologies.slice(0, 2).map((item) => item.toLowerCase().replace(/\s+/g, "_")).join("+");
-  const bits = [topic, intent, extra.subTopic, extra.scenario, tech].filter(Boolean);
+  const bits = [topic, intent, extra.subTopic, extra.scenario, extra.codingOp, tech].filter(Boolean);
   return bits.join("|");
 }
 
@@ -487,6 +492,7 @@ export function analyzeQuestion(
     && looksLikeFollowUp(cleaned, previous)
     && (intent === "definition" || intent === "clarification" || rule === "default")
     && cleaned.split(/\s+/).length <= 12
+    && !isCodingQuestion(cleaned, previous.intent)
   ) {
     if (/^why\b/i.test(cleaned)) {
       intent = "why";
@@ -509,6 +515,12 @@ export function analyzeQuestion(
       rule = "followup_generic";
       confidence = 0.7;
     }
+  }
+
+  if (isCodingQuestion(cleaned, previous?.intent)) {
+    intent = "coding";
+    rule = previous?.intent === "coding" ? "followup_coding" : "coding";
+    confidence = Math.max(confidence, 0.9);
   }
 
   const inferredIntent = intent === "follow_up" && previous
@@ -539,8 +551,13 @@ export function analyzeQuestion(
   const entities = detectEntities(cleaned);
   const scenario = detectScenario(cleaned);
   const subTopic = detectSubTopic(cleaned, entities);
+  const coding = extractCodingSpec(cleaned, previous);
   const depth = depthFor(cleaned, inferredIntent);
-  const fingerprint = questionFingerprint(topic, inferredIntent, technologies, { subTopic, scenario });
+  const fingerprint = questionFingerprint(topic, inferredIntent, technologies, {
+    subTopic,
+    scenario,
+    codingOp: coding.isCodingQuestion ? `${coding.language}:${coding.codingOperation}` : "",
+  });
   const { relation, isFollowUp } = relationToPrevious(
     { topic, intent: inferredIntent, fingerprint, question: cleaned, rawTopic },
     previous,
@@ -548,7 +565,13 @@ export function analyzeQuestion(
   const avoid = relation === "new_topic" ? [] : coveredConcepts.slice(0, 8);
   if (incomplete) confidence = Math.min(confidence, 0.25);
   if (!isAnswerableQuestion(cleaned)) confidence = Math.min(confidence, 0.15);
-  const primaryIntent: FineIntent = inferredIntent;
+  const primaryIntent: FineIntent = inferredIntent === "coding" && coding.language === "pyspark"
+    ? "pyspark_coding"
+    : inferredIntent === "coding" && coding.language === "sql"
+      ? "sql_coding"
+      : inferredIntent === "coding" && coding.language === "python"
+        ? "python_coding"
+        : inferredIntent;
   const secondaryIntent = detectSecondaryIntent(cleaned, inferredIntent);
 
   return {
@@ -575,5 +598,7 @@ export function analyzeQuestion(
     conceptsToAvoidRepeating: avoid,
     confidence,
     matchedRule: rule,
+    isCodingQuestion: coding.isCodingQuestion,
+    coding: coding.isCodingQuestion ? coding : null,
   };
 }

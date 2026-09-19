@@ -5,6 +5,7 @@ import {
   looksLikeUsEnglish,
   scoreEmployeeAnswer,
   scoreSpokenStyle,
+  toSpokenAnswer,
 } from "../../artifacts/api-server/src/lib/answer-quality.ts";
 import {
   FROZEN_INTERVIEW_PACK as pack,
@@ -14,6 +15,14 @@ import {
   subjectContext,
 } from "../../artifacts/api-server/src/lib/interview-voice.ts";
 import { mergeSpokenTranscript } from "../../artifacts/api-server/src/lib/question-finalizer.ts";
+import {
+  formatCodingAnswer,
+  hasExecutableCode,
+  repairIncompleteMerge,
+  extractCodingSpec,
+  isCodingQuestion,
+  validateCodingAnswer,
+} from "../../artifacts/api-server/src/lib/coding-intelligence.ts";
 
 assert.ok(pack.length >= 15, "Golden pack must freeze at least 15 interview questions");
 
@@ -73,9 +82,69 @@ assert.equal(
   mergeSpokenTranscript("How do you implement", "How do you implement incremental loading in ADF?"),
   "How do you implement incremental loading in ADF?",
 );
-assert.equal(
-  mergeSpokenTranscript("How do you implement incremental loading", "incremental loading in ADF?"),
-  "How do you implement incremental loading in ADF?",
+assert.equal(isCodeIntent("Write a sample code of SCD Type 1 in SQL"), true);
+assert.equal(isCodeIntent("What is SCD Type 1?"), false);
+assert.equal(isCodeIntent("Explain SCD Type 1."), false);
+assert.equal(isCodeIntent("How does SCD Type 1 work?"), false);
+assert.equal(isCodeIntent("How do you write an incremental MERGE in SQL?"), false);
+assert.equal(isCodeIntent("Give me the code."), true);
+assert.equal(isCodeIntent("Find duplicate records."), true);
+assert.equal(isCodeIntent("Find the latest record for every customer."), true);
+assert.equal(isCodingQuestion("Can you do the same in PySpark?", "coding"), true);
+assert.equal(isCodingQuestion("What if there are duplicate timestamps?", "coding"), true);
+assert.equal(extractCodingSpec("Write a SQL MERGE for SCD Type 1.").codingOperation, "scd1");
+assert.equal(extractCodingSpec("Write SQL for SCD Type 2.").codingOperation, "scd2");
+assert.equal(extractCodingSpec("Write Databricks SQL MERGE").dialect, "databricks_sql");
+assert.equal(extractCodingSpec("Write PySpark code to keep the latest record per customer.").language, "pyspark");
+assert.equal(extractCodingSpec("Write PySpark code to keep the latest record per customer.").codingOperation, "deduplication");
+assert.equal(extractCodingSpec("Write PySpark code to keep the latest record per customer.").businessKey, "customer_id");
+assert.equal(extractCodingSpec("Write Python code to read a JSON API and handle pagination.").language, "python");
+assert.equal(extractCodingSpec("Write Python code to read a JSON API and handle pagination.").codingOperation, "api");
+
+const brokenMerge = `MERGE INTO target_table AS target
+USING staging_table AS source
+ON target.id = source.id
+
+ UPDATE SET target.name = source.name,
+ target.value = source.value
+WHEN NOT MATCHED THEN
+ INSERT (id, name, value)
+ VALUES (source.id, source.name, source.value);`;
+const repaired = repairIncompleteMerge(brokenMerge);
+assert.match(repaired, /WHEN MATCHED THEN/i);
+assert.match(repaired, /WHEN NOT MATCHED THEN/i);
+const formatted = formatCodingAnswer(brokenMerge, extractCodingSpec("Write a MERGE statement."));
+assert.match(formatted, /WHEN MATCHED THEN/i);
+assert.match(formatted, /WHEN NOT MATCHED THEN/i);
+assert.equal(validateCodingAnswer(formatted, extractCodingSpec("Write a MERGE statement.")).ok, true);
+const doubled = formatCodingAnswer("```sql\n```\n\nsql\n" + brokenMerge + "\n```\n```\n\nFenced complete code first, then 1–2 spoken sentences", extractCodingSpec("Write a MERGE statement."));
+assert.match(doubled, /WHEN MATCHED THEN/i);
+assert.doesNotMatch(doubled, /```sql\s*```/);
+assert.doesNotMatch(doubled, /Fenced complete code first/);
+
+const pysparkRaw = `from pyspark.sql.functions import col
+w = Window.partitionBy("customer_id").orderBy(col("updated_at").desc())
+df.withColumn("rn", row_number().over(w)).filter(col("rn") == 1)`;
+const pysparkFormatted = formatCodingAnswer(pysparkRaw, extractCodingSpec("Write PySpark code to keep the latest record per customer."));
+assert.match(pysparkFormatted, /from pyspark\.sql\.window import Window/);
+assert.match(pysparkFormatted, /row_number/);
+assert.equal(validateCodingAnswer(pysparkFormatted, extractCodingSpec("Write PySpark code to keep the latest record per customer.")).ok, true);
+
+const scd2Incomplete = validateCodingAnswer(
+  "```sql\nMERGE INTO t USING s ON t.id = s.id\nWHEN MATCHED THEN UPDATE SET t.name = s.name\nWHEN NOT MATCHED THEN INSERT (id) VALUES (s.id);\n```",
+  extractCodingSpec("Write SQL for SCD Type 2."),
+);
+assert.equal(scd2Incomplete.ok, false);
+
+const spokenMerge = toSpokenAnswer(`Here is the merge:\nWHEN MATCHED THEN\nUPDATE SET x = 1\nWHEN NOT MATCHED THEN\nINSERT (x) VALUES (1)`, false, { keepCode: true });
+assert.match(spokenMerge, /WHEN MATCHED THEN/);
+assert.equal(hasExecutableCode("Here's a complete SQL snippet for SCD Type 2. This assumes a source table with new data and a target table."), false);
+assert.doesNotMatch(
+  formatCodingAnswer(
+    "Here's a complete SQL snippet for implementing SCD Type 2. This approach assumes you have a source table with new data and a target table where historical data is stored.",
+    extractCodingSpec("Write SQL for SCD Type 2."),
+  ),
+  /```sql\nwith new data/i,
 );
 
 const queryAnswer = scoreEmployeeAnswer(

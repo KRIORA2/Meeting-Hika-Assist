@@ -48,6 +48,11 @@ export function rewriteUngroundedExperience(answer: string, persona?: PersonaCar
   const skills = skillSet(persona);
   const stripped: string[] = [];
   let text = String(answer || "");
+  const fences: string[] = [];
+  text = text.replace(/```[\s\S]*?```/g, (block) => {
+    fences.push(block);
+    return `\n%%HIKA_CODE_${fences.length - 1}%%\n`;
+  });
 
   for (const tech of TECH) {
     if (isGrounded(tech, skills)) continue;
@@ -70,6 +75,7 @@ export function rewriteUngroundedExperience(answer: string, persona?: PersonaCar
     });
   }
 
+  text = text.replace(/%%HIKA_CODE_(\d+)%%/g, (_, index) => fences[Number(index)] || "");
   return { text: text.replace(/[ \t]+\n/g, "\n").trim(), stripped: [...new Set(stripped)] };
 }
 

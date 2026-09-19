@@ -53,11 +53,16 @@ ${retrieval || "(none)"}
 
 First JSON key MUST be answer so it can stream.
 {
-  "answer": "Spoken paragraphs the candidate can say for THIS intent",
+  "answer": "${analysis.intent === "coding" ? "runnable fenced snippet, then one spoken assumption and one edge case" : "Spoken paragraphs the candidate can say for THIS intent"}",
   "question": "≤60 chars",
   "keyPoints": ["anchor 1", "anchor 2", "anchor 3"],
   "confidence": "high|medium|low",
-  "sections": []
+  "sections": ${analysis.intent === "coding" ? `[{ "type": "${analysis.coding?.language === "sql" ? "sql" : "code"}", "title": "Code", "language": "${analysis.coding?.language === "pyspark" ? "python" : (analysis.coding?.language || "text")}", "content": "complete executable snippet" }]` : "[]"}
 }
-sections empty unless intent is coding. Azure paths use abfss examples, never s3://my-bucket.`;
+${analysis.intent === "coding" ? `CODING MODE: code first, then 1–2 spoken sentences. sections MUST contain the full runnable snippet.
+${analysis.coding ? `language=${analysis.coding.language} dialect=${analysis.coding.dialect || "generic"} op=${analysis.coding.codingOperation} key=${analysis.coding.businessKey || "unspecified"} keep=${analysis.coding.keepStrategy || "unspecified"}.` : ""}
+MERGE (when used) MUST include USING, ON, WHEN MATCHED THEN UPDATE SET, and WHEN NOT MATCHED THEN INSERT. Do not omit those clauses.
+SCD Type 1 overwrites matching keys and inserts new keys — no history. SCD Type 2 expires the current row and inserts a new version.
+PySpark answers include imports (Window and functions when used). Azure paths use abfss examples, never s3://my-bucket.
+Do not lecture before the code. Do not mix dialects.` : "sections empty unless intent is coding. Azure paths use abfss examples, never s3://my-bucket."}`;
 }

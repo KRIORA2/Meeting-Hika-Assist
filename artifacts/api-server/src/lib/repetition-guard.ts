@@ -122,6 +122,9 @@ export function applyRepetitionGuard(
 ): string {
   let text = String(answer || "").replace(ROLE_TITLE_OPENER, "").replace(CORPORATE, "").trim();
   if (!text) return text;
+  if (analysis?.intent === "coding" || analysis?.isCodingQuestion) {
+    return text.replace(/\n{3,}/g, "\n\n").trim();
+  }
 
   const opener = firstSentence(text);
   const lastOpener = recentOpeners[0] || "";

@@ -127,11 +127,10 @@ export function isExperienceQuestion(text: string): boolean {
   return /(in your (current )?project|you have used|have you used|how did you (implement|handle|use)|what (are|were) the transformations|transformations you have used|roles and responsibilities)/i.test(t);
 }
 
+import { isCodingQuestion as isCodingAsk, isSqlClauseLine } from "./coding-intelligence";
+
 export function isCodeIntent(text: string): boolean {
-  const t = text.toLowerCase();
-  if (isProcessQuestion(t)) return false;
-  if (isMeaningQuestion(t)) return false;
-  return /(write (me )?(a |the )?(code|query|script|function|merge)|give me (the )?(code|sql|query|script)|show me (the )?(code|sql|pyspark|query)|paste the (code|query)|executable code|implement (this|it) in|python script|pyspark (code|script)|sql query to|write a query|write the query|write a pyspark|write a merge)/i.test(t);
+  return isCodingAsk(text);
 }
 
 export function isPointwiseQuestion(text: string): boolean {
@@ -209,7 +208,7 @@ export function toSpokenAnswer(text: string, keepPoints = false, opts: { keepCod
     .replace(/^\s*#{1,6}\s+.+$/gm, "")
     .replace(/^\s*\*\*[^*]+\*\*\s*:?\s*$/gm, "")
     .replace(TITLED_BOX, "")
-    .replace(ALL_CAPS_TITLE, "")
+    .replace(/^\s*[A-Z][A-Z0-9 /,&:\-]{10,}\s*$/gm, (line) => (isSqlClauseLine(line) ? line : ""))
     .replace(/\*\*/g, "")
     .replace(CASUAL_OPENER, "")
     .replace(ROLE_TITLE_OPENER, "")
@@ -271,7 +270,11 @@ export function scoreEmployeeAnswer(answer: string, askedForCode = false, keepPo
   if (INVENTED_FICTION.test(text)) return { ok: false, reason: "invented" };
   if (!askedForCode && FUNCTION_CATALOG.test(text)) return { ok: false, reason: "generic_ai" };
   if (!askedForCode && looksLikeCodeDump(text)) return { ok: false, reason: "code_dump" };
-  if (TITLED_BOX.test(text) || ALL_CAPS_TITLE.test(text)) return { ok: false, reason: "titled_box" };
+  if (TITLED_BOX.test(text)) return { ok: false, reason: "titled_box" };
+  if (!askedForCode) {
+    const bogusTitle = text.split(/\n/).some((line) => ALL_CAPS_TITLE.test(line) && !isSqlClauseLine(line));
+    if (bogusTitle) return { ok: false, reason: "titled_box" };
+  }
   if (GENERIC_AI.test(text) || EVASIVE.test(text)) return { ok: false, reason: "generic_ai" };
   if (!askedForCode && !keepPoints && looksLikeBulletNotes(text)) return { ok: false, reason: "bullet_notes" };
   if (!askedForCode && WIKIPEDIA_OPENER.test(text)) return { ok: false, reason: "wikipedia_paragraph" };

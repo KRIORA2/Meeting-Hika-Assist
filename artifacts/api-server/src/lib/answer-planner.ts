@@ -1,6 +1,7 @@
 import type { PersonaCard } from "./persona";
 import type { InterviewIntent, QuestionAnalysis } from "./question-analyzer";
 import { personaKnows } from "./candidate-grounding";
+import { codingPlanLines } from "./coding-intelligence";
 
 export type AnswerPlan = {
   intent: InterviewIntent;
@@ -49,7 +50,7 @@ const INTENT_OBJECTIVE: Record<InterviewIntent, string> = {
   failure_handling: "What you retry, what you must not mark complete, and how you validate.",
   incident: "Triage, evidence, fix, communication, then prevent-repeat. Do not invent Slack alerts.",
   data_quality: "The check, what happens to bad rows, and how you reconcile.",
-  coding: "One spoken sentence of intent, then real production code, then one edge case.",
+  coding: "Complete fenced code first. Then 1–2 spoken sentences and one edge case. MERGE must include WHEN MATCHED THEN and WHEN NOT MATCHED THEN.",
   follow_up: "Continue the previous thread. Do not restart the topic.",
   clarification: "Restate the mechanism they asked about in plainer words.",
   example: "One concrete production example. Do not restart the definition.",
@@ -274,7 +275,7 @@ const GENERIC_MUST: Partial<Record<InterviewIntent, string[]>> = {
   troubleshooting: ["where you look first", "fix then prevent"],
   comparison: ["difference", "when each wins"],
   architecture: ["flow", "one reliability point"],
-  coding: ["working query", "edge case"],
+  coding: ["complete executable snippet", "required clauses/imports", "one edge case"],
   security: ["identity", "least privilege"],
   scalability: ["what breaks first", "the change"],
 };
@@ -314,7 +315,9 @@ function openerRuleFor(analysis: QuestionAnalysis, ungroundedTech: string[]): st
     return "Use verified resume facts naturally. No STAR headings. Do not invent employers.";
   }
   if (analysis.intent === "coding") {
-    return "Put working code in sections first. Then 1–2 spoken sentences, not a lecture.";
+    return analysis.coding
+      ? "Put a complete fenced code block first. Then 1–2 spoken sentences. Never drop MERGE WHEN MATCHED / WHEN NOT MATCHED or required imports."
+      : "Put working code in sections first. Then 1–2 spoken sentences, not a lecture.";
   }
   if (analysis.intent === "why" || analysis.intent === "why_not") {
     return "Open with the reason you'd pick it. Do not open with '<Product> is a…'.";
@@ -386,6 +389,11 @@ export function planAnswer(
     avoid.push("I have used " + ungroundedTech.join("/"), "in my project we used " + ungroundedTech.join("/"));
   }
 
+  if (analysis.intent === "coding") {
+    mustCover.unshift(...codingPlanLines(analysis.coding));
+    avoid.push("theory lecture before code", "incomplete MERGE", "missing PySpark imports");
+  }
+
   if (analysis.relationToPreviousQuestion !== "new_topic") {
     avoid.push("restarting the topic from scratch", "repeating the previous concept sequence");
   }
@@ -412,7 +420,7 @@ export function planAnswer(
     intent: analysis.intent,
     answerMode: analysis.answerMode,
     objective: INTENT_OBJECTIVE[analysis.intent],
-    mustCover: mustCover.slice(0, 7),
+    mustCover: mustCover.slice(0, analysis.intent === "coding" ? 12 : 7),
     avoid: [...new Set(avoid)].slice(0, 12),
     candidateFactsSafe: facts,
     depth: analysis.expectedDepth,
@@ -444,6 +452,9 @@ export function planToPrompt(plan: AnswerPlan, analysis: QuestionAnalysis): stri
         : "Do not mention the current project or résumé unless they asked about the candidate.",
     `Style: ${plan.styleCue}`,
     plan.openerRule,
+    analysis.coding
+      ? `CODING spec: language=${analysis.coding.language} dialect=${analysis.coding.dialect || "generic"} task=${analysis.coding.codingTask} op=${analysis.coding.codingOperation} key=${analysis.coding.businessKey || "unspecified"}`
+      : "",
     "Do not pad with security, cost, CI/CD, or monitoring unless this question needs them.",
   ].filter(Boolean).join("\n");
 }

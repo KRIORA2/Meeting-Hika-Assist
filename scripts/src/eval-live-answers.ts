@@ -143,6 +143,13 @@ const isolated: SuiteCase[] = [
   { domain: "SQL", q: "Find duplicate records.", intent: "coding", complexity: "simple" },
   { domain: "SQL", q: "Find the latest record for every customer.", intent: "coding", complexity: "simple" },
   { domain: "SQL", q: "Write a MERGE statement.", intent: "coding", complexity: "normal" },
+  { domain: "SQL", q: "Write a sample SQL MERGE for SCD Type 1.", intent: "coding", complexity: "normal" },
+  { domain: "SQL", q: "Write SQL for SCD Type 2.", intent: "coding", topic: "scd", complexity: "complex" },
+  { domain: "SQL", q: "Write a SQL query to find the second highest salary.", intent: "coding", complexity: "normal" },
+  { domain: "Python", q: "Write Python code to find the second largest number.", intent: "coding", complexity: "simple" },
+  { domain: "Python", q: "Write Python code to read a JSON API and handle pagination.", intent: "coding", complexity: "normal" },
+  { domain: "Spark", q: "Write PySpark code to keep the latest record per customer.", intent: "coding", complexity: "normal" },
+  { domain: "Spark", q: "Write PySpark code to join two DataFrames.", intent: "coding", complexity: "normal" },
   { domain: "SQL", q: "Implement SCD Type 2.", intent: "how_to_implement", topic: "scd", complexity: "complex" },
   { domain: "SQL", q: "Explain ROW_NUMBER.", intent: "definition", topic: "sql", complexity: "simple" },
   { domain: "SQL", q: "RANK vs DENSE_RANK.", intent: "comparison", complexity: "simple" },
@@ -240,6 +247,12 @@ const isolated: SuiteCase[] = [
   { domain: "Security", q: "How do you secure a data platform?", intent: "security", topic: "security", complexity: "normal" },
   { domain: "Monitoring", q: "How do you monitor a data platform?", intent: "how_to_monitor", complexity: "normal" },
   { domain: "SystemDesign", q: "How would you design a lakehouse platform?", intent: "how_to_design", complexity: "complex" },
+];
+
+const codingFollowSequence: SuiteCase[] = [
+  { domain: "CodingFollow", q: "Write SQL to find the latest customer record.", intent: "coding", session: "code", persist: true, complexity: "normal" },
+  { domain: "CodingFollow", q: "What if there are duplicate timestamps?", intent: "coding", followUp: true, session: "code", persist: true, complexity: "normal" },
+  { domain: "CodingFollow", q: "Can you do the same in PySpark?", intent: "coding", followUp: true, session: "code", persist: true, complexity: "normal" },
 ];
 
 const followUpSequence: SuiteCase[] = [
@@ -362,13 +375,20 @@ function capture(row: SuiteCase, result: Awaited<ReturnType<typeof generateInter
   if (fabricated.length) flags.push(`fabricated:${fabricated.join(",")}`);
   if (banned.length) flags.push("robotic_opener");
   if (result.live && !spoken.ok) flags.push(`spoken:${spoken.reason}`);
-  if (result.live && spokenStyle.documentationHeavy) flags.push("documentation_heavy");
-  if (result.live && spokenStyle.productPageOpener) flags.push("product_page_opener");
-  if (result.live && spokenStyle.tutorialOpener) flags.push("tutorial_opener");
-  if (result.live && spokenStyle.bulletCount >= 3) flags.push("bullet_notes");
+  if (result.live && !result.askedForCode && spokenStyle.documentationHeavy) flags.push("documentation_heavy");
+  if (result.live && !result.askedForCode && spokenStyle.productPageOpener) flags.push("product_page_opener");
+  if (result.live && !result.askedForCode && spokenStyle.tutorialOpener) flags.push("tutorial_opener");
+  if (result.live && !result.askedForCode && spokenStyle.bulletCount >= 3) flags.push("bullet_notes");
+  if (result.live && result.askedForCode && /\bMERGE\b/i.test(answer) && !/\bWHEN\s+MATCHED\b/i.test(answer)) {
+    flags.push("incomplete_merge");
+  }
+  if (result.live && result.askedForCode && /\bMERGE\b/i.test(answer) && !/\bWHEN\s+NOT\s+MATCHED\b/i.test(answer)) {
+    flags.push("incomplete_merge");
+  }
   if (result.live && /I don't grant people one by one/i.test(answer) && !/access|grant|onboard|admin/i.test(row.q)) {
     flags.push("canned_access_fallback");
   }
+  const spokenWeak = banned.length > 0 || (!result.askedForCode && spokenStyle.documentationHeavy);
   const previousAnswerSimilarity = previous ? tokenOverlap(String(previous.finalAnswer || ""), answer) : 0;
   if (previous && result.live) {
     const concepts = conceptSequence(answer);
@@ -380,7 +400,7 @@ function capture(row: SuiteCase, result: Awaited<ReturnType<typeof generateInter
   }
   const topicHay = `${analysis.topic} ${analysis.technologies.join(" ")}`.toLowerCase();
   const technicalTopicMatch = !topicHay.trim() || topicHay.split(/\s+/).some((token) => token.length > 3 && answer.toLowerCase().includes(token));
-  if (result.live && !technicalTopicMatch) flags.push("topic_mismatch");
+  if (result.live && !result.askedForCode && !technicalTopicMatch) flags.push("topic_mismatch");
   return {
     question: row.q,
     normalizedQuestion: analysis.question,
@@ -417,8 +437,8 @@ function capture(row: SuiteCase, result: Awaited<ReturnType<typeof generateInter
       technicalAccuracy: fabricated.length ? "fabricated_experience" : "unchecked_without_sme",
       relevance: retrievalBad.length ? "retrieval_mismatch" : retrievalMiss.length ? "retrieval_weak" : "ok",
       candidateGrounding: fabricated.length ? "fail" : "ok",
-      spokenQuality: result.live ? (spokenStyle.documentationHeavy || banned.length ? "weak" : "ok") : "not_live",
-      length: lengthBand(row.complexity, wordCount(answer)),
+      spokenQuality: result.live ? (spokenWeak ? "weak" : "ok") : "not_live",
+      length: result.askedForCode ? "skipped" : lengthBand(row.complexity, wordCount(answer)),
       depth: analysis.expectedDepth,
       retrievalRelevance: retrievalHits,
       repetition: result.repetition.score,
@@ -447,6 +467,7 @@ const sessionIds: Record<string, number> = {
   rep: 502,
   amb: 503,
   iv: 504,
+  code: 505,
 };
 
 async function runCase(row: SuiteCase, index: number, live: boolean): Promise<Scorecard> {
@@ -486,6 +507,7 @@ for (const [index, row] of [...isolated, ...sttCases].entries()) {
   localRows.push(await runCase(row, index, false));
 }
 const localFollow = await runSequence(followUpSequence, false);
+const localCodingFollow = await runSequence(codingFollowSequence, false);
 const localRep = await runSequence(repetitionSequence, false);
 const localAmb = await runSequence(ambiguousSequence, false);
 const localGround = [];
@@ -541,7 +563,7 @@ function followAccuracy(rows: SuiteCase[]): number {
   return total ? hits / total : 1;
 }
 const followUpAccuracy = Number((
-  (followAccuracy(followUpSequence) + followAccuracy(repetitionSequence) + followAccuracy(ambiguousSequence)) / 3
+  (followAccuracy(followUpSequence) + followAccuracy(repetitionSequence) + followAccuracy(ambiguousSequence) + followAccuracy(codingFollowSequence)) / 4
 ).toFixed(3));
 
 const domains = [...new Set(isolated.map((row) => row.domain))];
@@ -549,6 +571,7 @@ const domains = [...new Set(isolated.map((row) => row.domain))];
 type LiveBundle = {
   isolated: Scorecard[];
   followUp: Scorecard[];
+  codingFollow: Scorecard[];
   repetition: Scorecard[];
   ambiguous: Scorecard[];
   interview: Scorecard[];
@@ -572,6 +595,10 @@ if (LIVE) {
     "How do you use Unity Catalog?",
     "How would you store it in ADLS?",
     "Write a MERGE statement.",
+    "Write a sample SQL MERGE for SCD Type 1.",
+    "Write SQL for SCD Type 2.",
+    "Write a PySpark query to remove duplicates",
+    "Write Python code to find the second largest number.",
     "What is Delta Lake?",
     "Why Delta instead of Parquet?",
     "What is Direct Lake?",
@@ -595,6 +622,7 @@ if (LIVE) {
     }
   }
   const liveFollow = await runSequence(followUpSequence, true);
+  const liveCodingFollow = await runSequence(codingFollowSequence, true);
   const liveRep = await runSequence(repetitionSequence, true);
   const liveAmb = await runSequence(ambiguousSequence, true);
   const liveInterview = await runSequence(interviewSimulation, true);
@@ -645,6 +673,7 @@ if (LIVE) {
   liveBundle = {
     isolated: liveIsolated,
     followUp: liveFollow,
+    codingFollow: liveCodingFollow,
     repetition: liveRep,
     ambiguous: liveAmb,
     interview: liveInterview,
@@ -715,7 +744,7 @@ function representativeFrom(row: Scorecard | undefined, type: string) {
 }
 
 function collectRepresentatives(bundle: LiveBundle) {
-  const rows = [...bundle.isolated, ...bundle.followUp, ...bundle.interview, ...bundle.grounding, ...bundle.repetition];
+  const rows = [...bundle.isolated, ...bundle.followUp, ...(bundle.codingFollow || []), ...bundle.interview, ...bundle.grounding, ...bundle.repetition];
   return [
     representativeFrom(pickRow(rows, "What is Delta Lake?", "What is Azure Data Factory?", "What is Direct Lake?"), "definition"),
     representativeFrom(pickRow(rows, "Why Databricks?", "Why would you use ADF?", "Why Delta instead of Parquet?", "Why Delta?"), "why"),
@@ -727,7 +756,9 @@ function collectRepresentatives(bundle: LiveBundle) {
     representativeFrom(pickRow(rows, "Why did you choose watermarking?", "Why did you choose that approach?"), "follow-up"),
     representativeFrom(pickRow(rows, "Wouldn't watermarking fail?", "Would that scale to 10 TB?", "Would that work for 10 TB?"), "challenge"),
     representativeFrom(pickRow(rows, "Tell me about your current project.", "Have you worked with Snowflake?"), "experience"),
-    representativeFrom(pickRow(rows, "Write a MERGE statement.", "Write PySpark code to deduplicate events."), "coding"),
+    representativeFrom(pickRow(rows, "Write a sample SQL MERGE for SCD Type 1.", "Write a MERGE statement.", "Write PySpark code to keep the latest record per customer."), "coding"),
+    representativeFrom(pickRow(rows, "Write SQL for SCD Type 2."), "coding-scd2"),
+    representativeFrom(pickRow(rows, "Can you do the same in PySpark?"), "coding-follow-up"),
     representativeFrom(pickRow(rows, "How would you design a lakehouse platform?", "Walk me through the ingestion architecture."), "system-design"),
   ];
 }
@@ -737,7 +768,7 @@ const report = {
   liveError: liveError || undefined,
   productionPath: "POST /openai/analyze → generateInterviewAnswer (finalize → analyze → retrieve → plan → one streaming GPT call → repetition/grounding/quality)",
   local: {
-    questions: isolated.length + followUpSequence.length + repetitionSequence.length + ambiguousSequence.length + groundingCases.length + sttCases.length,
+    questions: isolated.length + followUpSequence.length + codingFollowSequence.length + repetitionSequence.length + ambiguousSequence.length + groundingCases.length + sttCases.length,
     domains: domains.length,
     intentAccuracy: intentChecked.length ? Number((intentHits / intentChecked.length).toFixed(3)) : null,
     topicAccuracy: topicChecked.length ? Number((topicHits / topicChecked.length).toFixed(3)) : null,
@@ -750,12 +781,14 @@ const report = {
         questions:
           liveBundle.isolated.length
           + liveBundle.followUp.length
+          + (liveBundle.codingFollow?.length || 0)
           + liveBundle.repetition.length
           + liveBundle.ambiguous.length
           + liveBundle.interview.length
           + liveBundle.grounding.length,
         isolated: summarize(liveBundle.isolated),
         followUp: summarize(liveBundle.followUp),
+        codingFollow: summarize(liveBundle.codingFollow || []),
         repetition: summarize(liveBundle.repetition),
         ambiguous: summarize(liveBundle.ambiguous),
         interview: summarize(liveBundle.interview),
@@ -770,7 +803,7 @@ const report = {
     : null,
 };
 
-writeFileSync(resolve(repoRoot, "scripts/eval-live-results.json"), JSON.stringify({ report, liveBundle, localFollow, localRep, localAmb, localGround, localRows: localRows.slice(0, 8) }, null, 2));
+writeFileSync(resolve(repoRoot, "scripts/eval-live-results.json"), JSON.stringify({ report, liveBundle, localFollow, localCodingFollow, localRep, localAmb, localGround, localRows: localRows.slice(0, 8) }, null, 2));
 
 if (!LIVE) {
   console.log("LIVE GPT EVALUATION NOT RUN — OPENAI_API_KEY unavailable.");
