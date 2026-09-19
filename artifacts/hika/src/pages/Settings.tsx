@@ -45,8 +45,10 @@ function Select({ value, options, onChange }: { value: string; options: { label:
 export default function Settings() {
   const [, navigate] = useLocation();
   const [model, setModel] = useState(() => {
-    if (typeof window === "undefined") return "gpt-4o";
-    return window.localStorage.getItem("hika-ai-model") || "gpt-4o";
+    if (typeof window === "undefined") return "gpt-5.6-sol";
+    const stored = window.localStorage.getItem("hika-ai-model");
+    if (!stored || stored === "gpt-4o") return "gpt-5.6-sol";
+    return stored;
   });
   const [desktopStatus, setDesktopStatus] = useState("");
 
@@ -115,8 +117,9 @@ export default function Settings() {
               <Select
                 value={model}
                 options={[
-                  { label: "GPT-4o (fast, ~1s answers)", value: "gpt-4o" },
-                  { label: "GPT-4.1 (most accurate)", value: "gpt-4.1" },
+                  { label: "GPT-5.6 Sol (current answers)", value: "gpt-5.6-sol" },
+                  { label: "GPT-4.1", value: "gpt-4.1" },
+                  { label: "GPT-4o", value: "gpt-4o" },
                 ]}
                 onChange={setModel}
               />

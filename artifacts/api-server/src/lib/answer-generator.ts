@@ -19,6 +19,7 @@ import type { PersonaCard } from "./persona";
 import type { QuestionAnalysis } from "./question-analyzer";
 import { answerFormatCue } from "./interview-voice";
 import { normalizeSpokenQuestion } from "./question-finalizer";
+import { buildAnswerChatParams, resolveAnswerModel } from "./answer-chat";
 
 export type InterviewUserPart =
   | { type: "text"; text: string }
@@ -247,29 +248,43 @@ export async function generateInterviewAnswer(args: {
       { type: "text", text: `THIS QUESTION ONLY:\n${question}` },
       ...(args.extraUserParts || []),
     ];
-    const completion = await openai.chat.completions.create({
-      model: args.model || process.env.OPENAI_MODEL || "gpt-4o",
-      temperature: spokenAnswer ? 0.8 : 0.15,
-      top_p: 0.9,
-      messages: [
-        { role: "system", content: systemPrompt },
-        { role: "user", content: userContent as never },
-      ],
-      response_format: { type: "json_object" },
-      max_tokens: plan.maxTokens,
-      stream: true,
-    });
+    const openAiStartedAt = Date.now();
     let raw = "";
     let lastPartial = "";
-    for await (const chunk of completion) {
-      const piece = chunk.choices[0]?.delta?.content ?? "";
-      raw += piece;
-      if (piece && firstTokenMs == null) firstTokenMs = Date.now() - started;
-      const partial = extractJsonStringField(raw, "answer");
-      if (partial.length >= 8 && partial !== lastPartial) {
-        lastPartial = partial;
-        args.onDelta?.(partial);
+    try {
+      const completion = await openai.chat.completions.create(buildAnswerChatParams({
+        model: resolveAnswerModel(args.model),
+        temperature: spokenAnswer ? 0.8 : 0.15,
+        topP: 0.9,
+        messages: [
+          { role: "system", content: systemPrompt },
+          { role: "user", content: userContent as never },
+        ],
+        maxOutputTokens: plan.maxTokens,
+        stream: true,
+      }));
+      for await (const chunk of completion) {
+        const piece = chunk.choices[0]?.delta?.content ?? "";
+        raw += piece;
+        if (piece && firstTokenMs == null) firstTokenMs = Date.now() - started;
+        const partial = extractJsonStringField(raw, "answer");
+        if (partial.length >= 8 && partial !== lastPartial) {
+          lastPartial = partial;
+          args.onDelta?.(partial);
+        }
       }
+    } catch (err) {
+      const diagnostic = err as {
+        openAiStarted?: boolean;
+        firstTokenArrived?: boolean;
+        openAiCompleted?: boolean;
+        openAiRequestMs?: number;
+      };
+      diagnostic.openAiStarted = true;
+      diagnostic.firstTokenArrived = firstTokenMs != null;
+      diagnostic.openAiCompleted = false;
+      diagnostic.openAiRequestMs = Date.now() - openAiStartedAt;
+      throw err;
     }
     let parsed: {
       answer?: string;
@@ -345,7 +360,17 @@ export async function generateInterviewAnswer(args: {
         const inner = section.content.replace(/^```[a-zA-Z0-9_-]*\n?/, "").replace(/```$/, "").trim();
         section.content = inner;
       }
-      answer = formatCodingAnswer(codeSource, spec);
+      try {
+        answer = formatCodingAnswer(codeSource, spec);
+      } catch (err) {
+        console.error(JSON.stringify({
+          event: "coding.format_failed",
+          language: spec.language,
+          dialect: spec.dialect,
+          reason: String((err as Error)?.message || err).slice(0, 180),
+        }));
+        answer = codeSource;
+      }
     }
   } else if (live) {
     const source = [parsedRecommended, answer].find((text) => text && !looksLikeCodeDump(text) && !/SELECT \* FROM table1/i.test(text || "")) || "";

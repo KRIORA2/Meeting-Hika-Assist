@@ -14,6 +14,7 @@ import {
   looksLikeUsEnglish,
 } from "../lib/answer-quality";
 import { CANDIDATE_IDENTITY, detectSpeakMode, speakModeCue, subjectContext } from "../lib/interview-voice";
+import { buildAnswerChatParams, FALLBACK_ANSWER_MODEL, resolveAnswerModel } from "../lib/answer-chat";
 
 const router = Router();
 
@@ -30,7 +31,37 @@ async function takeCredits(req: Request, res: Response, amount: number) {
   }
   return result;
 }
-const DEFAULT_ANALYSIS_MODEL = process.env.OPENAI_MODEL || "gpt-4o";
+
+function publicAnalyzeError(err: unknown): {
+  error: string;
+  type: string;
+  status: number;
+  code: string;
+} {
+  const anyErr = err as { status?: number; code?: string; message?: string; name?: string };
+  const status = Number(anyErr?.status) || 500;
+  const code = String(anyErr?.code || "");
+  const message = String(anyErr?.message || "");
+  if (status === 429 || /insufficient_quota|credit_balance_exhausted|credits remaining|quota/i.test(`${code} ${message}`)) {
+    return {
+      type: "provider_quota",
+      status: 429,
+      code: code || "insufficient_quota",
+      error: "The AI provider has no remaining credits. This is not a network problem.",
+    };
+  }
+  if (anyErr?.name === "AbortError" || /aborted/i.test(message)) {
+    return { type: "aborted", status: 499, code: "aborted", error: "The answer request was cancelled." };
+  }
+  if (status === 401 || /invalid api key|incorrect api key/i.test(message)) {
+    return { type: "provider_auth", status: 401, code: code || "unauthorized", error: "The AI provider rejected the server key." };
+  }
+  if (/ENOTFOUND|ETIMEDOUT|ECONNRESET|fetch failed|network/i.test(`${code} ${message}`)) {
+    return { type: "upstream_network", status: 502, code: code || "upstream_network", error: "Could not reach the AI provider." };
+  }
+  return { type: "analyze_failed", status: status >= 400 ? status : 500, code, error: "Failed to analyze context" };
+}
+const DEFAULT_ANALYSIS_MODEL = process.env.OPENAI_MODEL || FALLBACK_ANSWER_MODEL;
 const DEFAULT_TRANSCRIPTION_MODEL = process.env.OPENAI_TRANSCRIPTION_MODEL || "gpt-4o-transcribe";
 const DEFAULT_EMBEDDING_MODEL = process.env.OPENAI_EMBEDDING_MODEL || "text-embedding-3-small";
 const DEFAULT_REALTIME_MODEL = process.env.OPENAI_REALTIME_MODEL || "gpt-realtime";
@@ -78,11 +109,12 @@ function extractJsonStringField(raw: string, field: string) {
 }
 
 const ALLOWED_ANALYSIS_MODELS = new Set(
-  (process.env.OPENAI_ALLOWED_MODELS || "gpt-4.1,gpt-4o")
+  (process.env.OPENAI_ALLOWED_MODELS || `${FALLBACK_ANSWER_MODEL},gpt-4.1,gpt-4o`)
     .split(",")
     .map((model) => model.trim())
     .filter(Boolean),
 );
+ALLOWED_ANALYSIS_MODELS.add(FALLBACK_ANSWER_MODEL);
 
 function envInteger(name: string, fallback: number, min: number, max: number) {
   const value = Number.parseInt(process.env[name] ?? "", 10);
@@ -299,7 +331,7 @@ function detectQuestionType(text: string): InterviewQuestionType {
 function buildConfidenceBar(score: number): string {
   const clamped = Math.max(0, Math.min(100, score));
   const filled = Math.max(0, Math.min(10, Math.round(clamped / 10)));
-  return `${"█".repeat(filled)}${"░".repeat(10 - filled)}`;
+  return `${"?".repeat(filled)}${"?".repeat(10 - filled)}`;
 }
 
 function confidenceScoreFromLabel(value?: string): number {
@@ -322,7 +354,7 @@ function isLikelyCode(text: string): boolean {
 
 function shouldUseDocumentGrounding(_text: string, docs?: Array<{ id?: string; name?: string }> | null): boolean {
   // Live answers must start in ~1s. PDF/docx parse before the first token is what
-  // made some questions take 3–4s. Resume text already lives in session guidance.
+  // made some questions take 3—4s. Resume text already lives in session guidance.
   return false;
 }
 
@@ -600,39 +632,39 @@ function formatInterviewAnswer(args: {
   const bar = buildConfidenceBar(confidence);
 
   const keywordLines = keywords.length > 0
-    ? keywords.map((k) => `• ${k}`).join("\n")
-    : "• Role fit\n• Business impact\n• Production reliability";
+    ? keywords.map((k) => `— ${k}`).join("\n")
+    : "— Role fit\n— Business impact\n— Production reliability";
 
   const resumeLines = resumeMatch.length > 0
     ? resumeMatch.join("\n")
     : "Company: Not found in uploaded resume\nProject: Not found in uploaded resume\nExperience: Not enough resume evidence\nSkill: Not enough resume evidence";
 
   return [
-    "🎯 Recommended Answer",
+    "?? Recommended Answer",
     "",
     args.recommendedAnswer.trim(),
     "",
     "--------------------------------------------------",
     "",
-    "📌 Mention These Keywords",
+    "?? Mention These Keywords",
     "",
     keywordLines,
     "",
     "--------------------------------------------------",
     "",
-    "💼 Resume Match",
+    "?? Resume Match",
     "",
     resumeLines,
     "",
     "--------------------------------------------------",
     "",
-    "⭐ If Interviewer Asks More",
+    "? If Interviewer Asks More",
     "",
     args.followUp.trim(),
     "",
     "--------------------------------------------------",
     "",
-    "🧠 Interview Tip",
+    "?? Interview Tip",
     "",
     args.tip.trim(),
     "",
@@ -651,10 +683,10 @@ async function runCodeRepairPass(args: {
 }): Promise<{ answer: string; sections: Array<{ type: string; title: string; language: string; content: string }> }> {
   const { promptQuestion, originalAnswer, preferredLanguage } = args;
 
-  const repaired = await openai.chat.completions.create({
+  const repaired = await openai.chat.completions.create(buildAnswerChatParams({
     model: DEFAULT_ANALYSIS_MODEL,
     temperature: 0,
-    top_p: 1,
+    topP: 1,
     messages: [
       {
         role: "system",
@@ -680,9 +712,9 @@ JSON schema:
         content: `Question:\n${promptQuestion}\n\nWeak answer to fix:\n${originalAnswer}\n\nPreferred language: ${preferredLanguage ?? "auto"}`,
       },
     ],
-    response_format: { type: "json_object" },
-    max_tokens: 1500,
-  });
+    maxOutputTokens: 1500,
+    stream: false,
+  }));
 
   const raw = repaired.choices[0]?.message?.content ?? "{}";
   let parsed: any = {};
@@ -745,9 +777,9 @@ router.post("/openai/analyze", async (req, res) => {
     const spent = await takeCredits(req, res, CREDIT_COSTS.analyze);
   if (!spent) return;
   void warmSessionMemory(req.authUser!.id);
-  const analysisModel = requestedModel && ALLOWED_ANALYSIS_MODELS.has(requestedModel)
-    ? requestedModel
-    : DEFAULT_ANALYSIS_MODEL;
+  const analysisModel = resolveAnswerModel(
+    requestedModel && ALLOWED_ANALYSIS_MODELS.has(requestedModel) ? requestedModel : null,
+  );
   const explicitQuestion = extractExplicitQuestion(transcript);
   if (explicitQuestion && !looksLikeUsEnglish(explicitQuestion)) {
     const restored = await grantCredits(req.authUser!.id, CREDIT_COSTS.analyze).catch(() => null);
@@ -787,8 +819,28 @@ router.post("/openai/analyze", async (req, res) => {
   }
 
   const streamToClient = wantsAnalyzeStream(req);
+  const analyzeStarted = Date.now();
+  const analyzeRequestId = `anl_${analyzeStarted.toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+  const transcriptLength = String(transcript || "").length;
+  const historyChars = history.reduce((sum, turn) => sum + String(turn?.content || "").length, 0);
+  const extraUserChars = extraUserParts.reduce((sum, part) => {
+    if (part.type === "text") return sum + part.text.length;
+    return sum;
+  }, 0);
+  req.log.info({
+    event: "analyze.request",
+    requestId: analyzeRequestId,
+    questionLength: String(explicitQuestion || transcript || "").length,
+    transcriptLength,
+    historyLength: history.length,
+    historyChars,
+    extraUserChars,
+    uploadedDocCount: uploadedDocs?.length || 0,
+    hasPersona: Boolean(persona),
+    model: analysisModel,
+    stream: streamToClient,
+  });
   try {
-    const analyzeStarted = Date.now();
     if (streamToClient) {
       res.status(200);
       res.setHeader("Content-Type", "application/x-ndjson; charset=utf-8");
@@ -872,6 +924,7 @@ router.post("/openai/analyze", async (req, res) => {
 
     req.log.info({
       event: "analyze.complete",
+      requestId: analyzeRequestId,
       source: "subject_docs",
       question: inferredQuestion.slice(0, 180),
       topic: analysis.topic,
@@ -917,14 +970,49 @@ router.post("/openai/analyze", async (req, res) => {
       res.json(payload);
     }
   } catch (err) {
-    req.log.error({ err }, "OpenAI analyze error");
+    const publicErr = publicAnalyzeError(err);
+    const anyErr = err as { openAiStarted?: boolean; firstTokenArrived?: boolean; openAiRequestMs?: number; openAiCompleted?: boolean };
+    const elapsedMs = Date.now() - analyzeStarted;
+    req.log.error({
+      err,
+      event: "analyze.error",
+      requestId: analyzeRequestId,
+      type: publicErr.type,
+      status: publicErr.status,
+      code: publicErr.code,
+      elapsedMs,
+      headersSent: res.headersSent,
+      streamToClient,
+      openAiStarted: Boolean(anyErr?.openAiStarted),
+      firstTokenArrived: Boolean(anyErr?.firstTokenArrived),
+      openAiCompleted: Boolean(anyErr?.openAiCompleted),
+      openAiRequestMs: anyErr?.openAiRequestMs ?? null,
+    }, "OpenAI analyze error");
     await grantCredits(req.authUser!.id, CREDIT_COSTS.analyze).catch(() => undefined);
     if (streamToClient && res.headersSent) {
-      res.write(`${JSON.stringify({ type: "error", error: "Failed to analyze context" })}\n`);
+      res.write(`${JSON.stringify({
+        type: "error",
+        error: publicErr.error,
+        status: publicErr.status,
+        code: publicErr.code,
+        errorType: publicErr.type,
+        requestId: analyzeRequestId,
+        elapsedMs,
+        openAiStarted: Boolean(anyErr?.openAiStarted),
+        firstTokenArrived: Boolean(anyErr?.firstTokenArrived),
+        openAiCompleted: Boolean(anyErr?.openAiCompleted),
+      })}\n`);
       res.end();
       return;
     }
-    res.status(500).json({ error: "Failed to analyze context" });
+    res.status(publicErr.status >= 400 ? publicErr.status : 500).json({
+      error: publicErr.error,
+      status: publicErr.status,
+      code: publicErr.code,
+      errorType: publicErr.type,
+      requestId: analyzeRequestId,
+      elapsedMs,
+    });
   }
 });
 

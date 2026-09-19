@@ -66,7 +66,7 @@ const useRealtimeVoice = false;
 const realtimeMetrics = {};
 let realtimeDiagnostics = false;
 let selectedSessionMode = "interview";
-let selectedModel = "gpt-4o";
+let selectedModel = "gpt-5.6-sol";
 let autoAnswerEnabled = true;
 let saveTranscriptEnabled = true;
 let remainingCredits = null;
@@ -251,7 +251,10 @@ async function init() {
       document.querySelectorAll(".mode-choice").forEach((item) => item.classList.toggle("active", item === button));
     });
   });
-  if (modelSelect) modelSelect.addEventListener("change", () => { selectedModel = modelSelect.value; });
+  if (modelSelect) {
+    selectedModel = modelSelect.value || "gpt-5.6-sol";
+    modelSelect.addEventListener("change", () => { selectedModel = modelSelect.value; });
+  }
   if (autoAnswer) autoAnswer.addEventListener("change", () => { autoAnswerEnabled = autoAnswer.checked; });
   if (saveTranscript) saveTranscript.addEventListener("change", () => { saveTranscriptEnabled = saveTranscript.checked; });
   micBtn.addEventListener("click", toggleRecording);
@@ -2245,7 +2248,7 @@ async function analyze(utterance) {
     transcript: context,
     sessionId,
     uploadedDocs: uploadedDocs.slice(0, 3).map((doc) => ({ id: doc.id, name: doc.name })),
-    model: selectedModel || "gpt-4o",
+    model: selectedModel || "gpt-5.6-sol",
     mode: selectedSessionMode === "call" ? "meeting" : "interview",
     stream: true,
     history: insights.slice(0, 3).reverse().flatMap(item => [
@@ -2271,6 +2274,16 @@ async function analyze(utterance) {
     renderInsights();
   };
 
+  const requestStartedAt = Date.now();
+  const payloadBytes = new TextEncoder().encode(JSON.stringify(body)).length;
+  console.info("Analyze request sizes", {
+    questionLength: String(utterance || "").length,
+    transcriptLength: String(body.transcript || "").length,
+    historyLength: Array.isArray(body.history) ? body.history.length : 0,
+    payloadBytes,
+    model: body.model,
+    stream: body.stream === true,
+  });
   try {
     const result = await analyzeStreaming(body, (partial) => {
       if (sessionEnding || !sessionId || epoch !== sessionEpoch) return;
@@ -2298,8 +2311,30 @@ async function analyze(utterance) {
     else void refreshCredits();
     return true;
   } catch (err) {
-    console.error("Analyze error", err);
-    showToast("Could not get an answer. Check your connection and try again.");
+    const elapsedMs = Date.now() - requestStartedAt;
+    const status = Number(err?.status) || 0;
+    const code = String(err?.code || err?.analyzeType || "");
+    const message = String(err?.message || "");
+    console.error("Analyze error", {
+      status,
+      code,
+      elapsedMs,
+      requestId: err?.requestId || "",
+      openAiStarted: Boolean(err?.openAiStarted),
+      firstTokenArrived: Boolean(err?.firstTokenArrived),
+      streamingStarted: Boolean(err?.streamingStarted),
+      message: message.slice(0, 180),
+    });
+    if (status === 402) return false;
+    if (status === 429 || /quota|credits/i.test(`${code} ${message}`)) {
+      showToast("Could not get an answer. The AI provider is out of credits — not a connection issue.");
+    } else if (status === 401) {
+      showToast("Could not get an answer. Sign-in expired. Please sign in again.");
+    } else if (status) {
+      showToast(`Could not get an answer. ${status}: ${message.slice(0, 80) || "request failed"}`);
+    } else {
+      showToast(`Could not get an answer. ${message.slice(0, 80) || "Check your connection and try again."}`);
+    }
     return false;
   } finally {
     isAnalyzing = false;
@@ -2315,7 +2350,9 @@ async function analyzeStreaming(body, onDelta) {
   if (!res.ok) {
     const payload = await res.json().catch(() => null);
     const error = new Error(typeof payload?.error === "string" ? payload.error : `Request failed (${res.status})`);
-    error.status = res.status;
+    error.status = Number(payload?.status) || res.status;
+    error.code = payload?.code || payload?.errorType || "";
+    error.requestId = payload?.requestId || "";
     if (res.status === 402) {
       if (typeof payload?.credits === "number") setCredits(payload.credits);
       showOutOfCredits();
@@ -2343,7 +2380,7 @@ async function analyzeStreaming(body, onDelta) {
       try { event = JSON.parse(trimmed); } catch { continue; }
       if (event.type === "delta") onDelta?.(event);
       else if (event.type === "done") donePayload = event;
-      else if (event.type === "error") throw new Error(event.error || "Analyze failed");
+      else if (event.type === "error") throw attachAnalyzeStreamError(event);
     }
     if (done) break;
   }
@@ -2352,9 +2389,23 @@ async function analyzeStreaming(body, onDelta) {
       const event = JSON.parse(buffer.trim());
       if (event.type === "done") donePayload = event;
       else if (event.type === "delta") onDelta?.(event);
-    } catch { /* ignore trailing junk */ }
+      else if (event.type === "error") throw attachAnalyzeStreamError(event);
+    } catch (err) {
+      if (err?.status || err?.code || /Analyze failed|credits|quota|provider/i.test(String(err?.message || ""))) throw err;
+    }
   }
   return donePayload;
+}
+
+function attachAnalyzeStreamError(event) {
+  const error = new Error(event.error || "Analyze failed");
+  error.status = Number(event.status) || 500;
+  error.code = event.code || event.errorType || "";
+  error.requestId = event.requestId || "";
+  error.openAiStarted = Boolean(event.openAiStarted);
+  error.firstTokenArrived = Boolean(event.firstTokenArrived);
+  error.streamingStarted = true;
+  return error;
 }
 
 async function handleManualAsk() {

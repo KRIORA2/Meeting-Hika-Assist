@@ -1048,9 +1048,8 @@ function PiPContent({
     const userTurn = latestText.trim();
 
     try {
-      const preferredModel = typeof window !== "undefined"
-        ? (window.localStorage.getItem("hika-ai-model") || "gpt-4o")
-        : "gpt-4o";
+      const storedModel = typeof window !== "undefined" ? window.localStorage.getItem("hika-ai-model") : null;
+      const preferredModel = !storedModel || storedModel === "gpt-4o" ? "gpt-5.6-sol" : storedModel;
 
       const result = await analyzeContext.mutateAsync({
         data: {

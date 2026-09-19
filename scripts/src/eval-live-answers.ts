@@ -479,7 +479,7 @@ async function runCase(row: SuiteCase, index: number, live: boolean): Promise<Sc
     persona: resumeAdf,
     live,
     persist: row.persist ?? Boolean(row.session),
-    model: process.env.OPENAI_MODEL || "gpt-4o",
+    model: process.env.OPENAI_MODEL || "gpt-5.6-sol",
   });
   return capture(row, result);
 }
@@ -495,7 +495,7 @@ async function runSequence(rows: SuiteCase[], live: boolean): Promise<Scorecard[
       persona: resumeAdf,
       live,
       persist: true,
-      model: process.env.OPENAI_MODEL || "gpt-4o",
+      model: process.env.OPENAI_MODEL || "gpt-5.6-sol",
     });
     out.push(capture(row, result, out[out.length - 1]));
   }
@@ -640,7 +640,7 @@ if (LIVE) {
     "Walk me through your current project.",
   ];
   const modelComparison: Array<Record<string, unknown>> = [];
-  for (const model of ["gpt-4o", "gpt-4.1"]) {
+  for (const model of [process.env.OPENAI_MODEL || "gpt-5.6-sol"]) {
     for (const q of compareQs) {
       try {
         const result = await generateInterviewAnswer({
