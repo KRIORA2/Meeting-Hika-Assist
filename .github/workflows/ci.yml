@@ -38,6 +38,8 @@ jobs:
         run: pnpm typecheck
 
       - name: Verify answer quality
+        env:
+          HIKA_SKIP_MEMORY_PERSIST: "1"
         run: pnpm verify:answers
 
       - name: Verify Realtime security

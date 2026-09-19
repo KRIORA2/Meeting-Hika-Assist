@@ -194,7 +194,9 @@ export async function rememberAnswer(
     const current = cache.get(userId) ?? await warmSessionMemory(userId).catch(() => []);
     const next = mergeItems(current, item);
     cache.set(userId, next);
-    void persist(userId, next);
+    if (process.env.HIKA_SKIP_MEMORY_PERSIST !== "1") {
+      void persist(userId, next);
+    }
   }
 
   const thread = getInterviewThread(userId, sessionId);

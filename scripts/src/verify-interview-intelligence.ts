@@ -1,4 +1,7 @@
 import assert from "node:assert/strict";
+import { env } from "node:process";
+
+env.HIKA_SKIP_MEMORY_PERSIST ||= "1";
 import { analyzeQuestion, detectIntent, questionFingerprint } from "../../artifacts/api-server/src/lib/question-analyzer.ts";
 import { planAnswer } from "../../artifacts/api-server/src/lib/answer-planner.ts";
 import { applyRepetitionGuard, tokenOverlap, sequenceOverlap, conceptSequence, scoreRepetition } from "../../artifacts/api-server/src/lib/repetition-guard.ts";
