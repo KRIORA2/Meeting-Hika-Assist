@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: hikanest-api-beta
+    name: hikanest-api-v1
     runtime: node
     rootDir: .
     plan: free
@@ -11,6 +11,10 @@ services:
     envVars:
       - key: NODE_ENV
         value: production
+      - key: OPENAI_MODEL
+        value: gpt-5.6-sol
+      - key: OPENAI_ALLOWED_MODELS
+        value: gpt-5.6-sol,gpt-4.1,gpt-4o
       - key: OPENAI_API_KEY
         sync: false
       - key: CORS_ALLOWED_ORIGINS
