@@ -19,7 +19,7 @@ router.get("/healthz", (_req, res) => {
 
 router.get("/desktop/update", (_req, res) => {
   res.json({
-    version: process.env.DESKTOP_LATEST_VERSION ?? "1.1.22",
+    version: process.env.DESKTOP_LATEST_VERSION ?? "1.1.23",
     downloadUrl: process.env.DESKTOP_DOWNLOAD_URL ?? null,
   });
 });

@@ -28,12 +28,13 @@ export function isIncompleteQuestion(question: string): boolean {
   if (/\.{2,}$|…$/.test(text)) return true;
   if (TRAILING_FUNCTION.test(text)) return true;
   const words = text.split(/\s+/);
-  if (words.length <= 3 && /^(how|what|why|can|could|walk)\b/i.test(text) && !/[?]/.test(text)) return true;
+  const namedTech = /\b(fail|merge|load|skew|join|lake|factory|spark|sql|cdc|watermark|delta|adf|pipeline|fabric|snowflake|kafka|pyspark|databricks|scd(?:\s*type)?|unity catalog|direct lake|power bi|synapse|dlt|lakehouse|parquet)\b/i;
+  if (words.length <= 3 && /^(how|what|why|can|could|walk)\b/i.test(text) && !/[?]/.test(text) && !namedTech.test(text)) return true;
   if (
     words.length < 7
     && /^(how|what|why|can you)\b/i.test(text)
     && !/[?]/.test(text)
-    && !/\b(fail|merge|load|skew|join|lake|factory|spark|sql|cdc|watermark|delta|adf|pipeline|fabric|snowflake|kafka)\b/i.test(text)
+    && !namedTech.test(text)
   ) {
     return true;
   }

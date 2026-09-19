@@ -36,12 +36,13 @@ export function isIncompleteQuestion(text: string): boolean {
   if (/\.{2,}$|…$/.test(value)) return true;
   if (TRAILING_FUNCTION.test(value)) return true;
   const words = value.split(/\s+/);
-  if (words.length <= 3 && /^(how|what|why|can|could|walk)\b/i.test(value) && !/[?]/.test(value)) return true;
+  const namedTech = /\b(fail|merge|load|skew|join|lake|factory|spark|sql|cdc|watermark|delta|adf|pipeline|fabric|snowflake|kafka|pyspark|databricks|scd(?:\s*type)?|unity catalog|direct lake|power bi|synapse|dlt|lakehouse|parquet)\b/i;
+  if (words.length <= 3 && /^(how|what|why|can|could|walk)\b/i.test(value) && !/[?]/.test(value) && !namedTech.test(value)) return true;
   if (
     words.length < 7
     && /^(how|what|why|can you)\b/i.test(value)
     && !/[?]/.test(value)
-    && !/\b(fail|merge|load|skew|join|lake|factory|spark|sql|cdc|watermark|delta|adf|pipeline|fabric|snowflake|kafka)\b/i.test(value)
+    && !namedTech.test(value)
   ) {
     return true;
   }

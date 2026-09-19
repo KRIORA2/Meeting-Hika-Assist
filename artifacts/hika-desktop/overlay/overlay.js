@@ -658,11 +658,12 @@ function isIncompleteQuestion(text) {
   if (/\.{2,}$|…$/.test(value)) return true;
   if (/\b(the|a|an|to|for|with|of|and|or|if)\s*[.?,]*$/i.test(value)) return true;
   const words = value.split(/\s+/);
-  if (words.length <= 3 && /^(how|what|why|can|could|walk)\b/i.test(value) && !/[?]/.test(value)) return true;
+  if (words.length <= 3 && /^(how|what|why|can|could|walk)\b/i.test(value) && !/[?]/.test(value) && !SHORT_TECH_ASK.test(value)) return true;
   if (
     words.length < 7
     && /^(how|what|why|can you)\b/i.test(value)
     && !/[?]/.test(value)
+    && !SHORT_TECH_ASK.test(value)
     && !/\b(fail|merge|load|skew|join|lake|factory|spark|sql|cdc|watermark|delta|adf|pipeline|fabric|snowflake|kafka)\b/i.test(value)
   ) {
     return true;
@@ -2241,14 +2242,14 @@ function resolveAnalyzeModel() {
   return model;
 }
 
-async function analyze(utterance) {
+async function analyze(utterance, { typed = false } = {}) {
   if (!utterance || isAnalyzing || sessionEnding || !sessionId) return false;
   await detectHostedAnswerApi();
-  if (isHallucinatedTranscript(utterance)) {
+  if (!typed && isHallucinatedTranscript(utterance)) {
     showToast("I caught speech, but it didn't sound like a clear English question.", "warn");
     return false;
   }
-  if (isIncompleteQuestion(utterance)) {
+  if (!typed && isIncompleteQuestion(utterance)) {
     showToast("I caught your speech, but the question seems incomplete.", "warn");
     return false;
   }
@@ -2451,7 +2452,7 @@ async function handleManualAsk() {
   if (!transcriptReadyForAsk && typedQuestion) addTranscriptChunk(q);
   transcriptReadyForAsk = false;
   askBtn.disabled   = true;
-  const answered = await analyze(q);
+  const answered = await analyze(q, { typed: Boolean(typedQuestion) });
   if (!answered && typedQuestion) askInput.value = typedQuestion;
   askBtn.disabled = false;
   askInput.focus();
