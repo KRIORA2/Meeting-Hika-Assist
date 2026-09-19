@@ -20,6 +20,20 @@ import { ANSWER_API_METHOD, ANSWER_MODEL, buildAnswerChatParams, extractUpstream
 
 const router = Router();
 
+async function optionalWithin<T>(promise: Promise<T>, timeoutMs: number): Promise<T | null> {
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<null>((resolve) => {
+        timer = setTimeout(() => resolve(null), Math.max(0, timeoutMs));
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 async function takeCredits(req: Request, res: Response, amount: number) {
   const result = await consumeCredits(req.authUser!.id, amount);
   if (!result.ok) {
@@ -776,6 +790,8 @@ router.post("/openai/prepare-persona", async (req, res) => {
 });
 
 router.post("/openai/analyze", async (req, res) => {
+  const analyzeStarted = Date.now();
+  const analyzeRequestId = `anl_${analyzeStarted.toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
   // Audio -> STT (client) -> question -> analyzeQuestion + thread
   // -> planAnswer + subjectContext(intent) -> one streaming LLM call
   // -> repetition guard -> overlay. No extra model calls on the hot path.
@@ -786,15 +802,30 @@ router.post("/openai/analyze", async (req, res) => {
   }
 
   const { transcript, screenshotBase64, uploadedDocs, history = [], mode, sessionId } = parsed.data;
-    const spent = await takeCredits(req, res, CREDIT_COSTS.analyze);
-  if (!spent) return;
-  void warmSessionMemory(req.authUser!.id);
   const analysisModel = resolveAnswerModel();
   const explicitQuestion = extractExplicitQuestion(transcript);
   const identity = newQuestionIdentity(explicitQuestion || transcript || "");
   const bodyMeta = req.body && typeof req.body === "object" ? req.body as Record<string, unknown> : {};
   const questionId = String(bodyMeta.questionId || identity.questionId);
   const generationId = String(bodyMeta.generationId || identity.generationId);
+  req.log.info({
+    event: "latency.backend_received",
+    requestId: analyzeRequestId,
+    questionId,
+    generationId,
+    elapsedMs: 0,
+  });
+
+  // Persona preparation is optional context. Start it beside the required
+  // credit transaction and only consume it when already warm or promptly ready.
+  const personaStartedAt = Date.now();
+  const personaPromise = resolvePersona(req.authUser!.id, uploadedDocs).catch(() => null);
+  const creditStartedAt = Date.now();
+  const spent = await takeCredits(req, res, CREDIT_COSTS.analyze);
+  const creditMs = Date.now() - creditStartedAt;
+  if (!spent) return;
+  void warmSessionMemory(req.authUser!.id);
+
   if (explicitQuestion && isHallucinatedTranscript(explicitQuestion)) {
     const restored = await grantCredits(req.authUser!.id, CREDIT_COSTS.analyze).catch(() => null);
     res.json({
@@ -811,7 +842,9 @@ router.post("/openai/analyze", async (req, res) => {
     });
     return;
   }
-  const persona = await resolvePersona(req.authUser!.id, uploadedDocs).catch(() => null);
+  const remainingPersonaBudgetMs = Math.max(0, 75 - (Date.now() - personaStartedAt));
+  const persona = await optionalWithin(personaPromise, remainingPersonaBudgetMs);
+  const personaMs = Date.now() - personaStartedAt;
 
   const extraUserParts: InterviewUserPart[] = [];
   if (transcript && explicitQuestion && transcript !== explicitQuestion) {
@@ -835,8 +868,6 @@ router.post("/openai/analyze", async (req, res) => {
   }
 
   const streamToClient = wantsAnalyzeStream(req);
-  const analyzeStarted = Date.now();
-  const analyzeRequestId = `anl_${analyzeStarted.toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
   const transcriptLength = String(transcript || "").length;
   const historyChars = history.reduce((sum, turn) => sum + String(turn?.content || "").length, 0);
   const extraUserChars = extraUserParts.reduce((sum, part) => {
@@ -853,6 +884,8 @@ router.post("/openai/analyze", async (req, res) => {
     extraUserChars,
     uploadedDocCount: uploadedDocs?.length || 0,
     hasPersona: Boolean(persona),
+    creditMs,
+    personaMs,
     model: analysisModel,
     stream: streamToClient,
   });
@@ -867,6 +900,7 @@ router.post("/openai/analyze", async (req, res) => {
       }
     }
     const inferredQuestion = normalizeQuestion(explicitQuestion ?? transcript ?? "");
+    let firstDeltaForwarded = false;
     const generated = await generateInterviewAnswer({
       question: explicitQuestion ?? transcript ?? "",
       userId: req.authUser!.id,
@@ -879,8 +913,18 @@ router.post("/openai/analyze", async (req, res) => {
       extraUserParts,
       questionId,
       generationId,
+      onTiming: (event, timing) => {
+        req.log.info({
+          event: `latency.${event}`,
+          requestId: analyzeRequestId,
+          questionId,
+          generationId,
+          ...timing,
+        });
+      },
       onDelta: streamToClient
         ? (partial, meta) => {
+            const backendDeltaAt = Date.now();
             res.write(`${JSON.stringify({
               type: "delta",
               questionId: meta?.questionId || questionId,
@@ -889,9 +933,28 @@ router.post("/openai/analyze", async (req, res) => {
               answer: partial,
               status: "generating",
               model: analysisModel,
+              timing: {
+                backendRequestToDeltaMs: backendDeltaAt - analyzeStarted,
+                creditMs,
+                personaMs,
+                ...(meta?.timing || {}),
+              },
             })}\n`);
             if (typeof (res as Response & { flush?: () => void }).flush === "function") {
               (res as Response & { flush: () => void }).flush();
+            }
+            if (!firstDeltaForwarded) {
+              firstDeltaForwarded = true;
+              req.log.info({
+                event: "latency.backend_first_token",
+                requestId: analyzeRequestId,
+                questionId,
+                generationId,
+                elapsedMs: backendDeltaAt - analyzeStarted,
+                creditMs,
+                personaMs,
+                ...(meta?.timing || {}),
+              });
             }
           }
         : undefined,

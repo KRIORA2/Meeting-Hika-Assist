@@ -94,6 +94,28 @@ let pendingSttCount = 0;
 let analyzeAbort = null;
 let activeQuestionId = "";
 let activeGenerationId = "";
+let activePreviewSttController = null;
+let previewSttEpoch = 0;
+let latencyTrace = null;
+
+function startLatencyTrace() {
+  latencyTrace = {
+    id: `lat_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`,
+    startedAt: performance.now(),
+    firstFrontendTokenSeen: false,
+  };
+  markLatency("STOP_MIC");
+}
+
+function markLatency(event, extra = {}) {
+  if (!latencyTrace) return;
+  const elapsedMs = Math.round(performance.now() - latencyTrace.startedAt);
+  console.info("[hikanest:latency]", event, {
+    traceId: latencyTrace.id,
+    elapsedMs,
+    ...extra,
+  });
+}
 
 function markRealtimeMetric(name) {
   const now = performance.now();
@@ -1314,12 +1336,15 @@ function createSourceRecorder(stream, sourceId, generation) {
     const allow = generation === captureGeneration && (
       listenState === "starting" || listenState === "listening" || listenState === "stopping" || listenState === "flushing"
     );
-    if (allow && event.data && event.data.size >= 500) {
+    if (allow && event.data && event.data.size >= 500 && !isTranscribing) {
       void ingestLiveSlice(event.data, sourceId, generation);
     }
   };
   try {
-    recorder.start(400);
+    // A 400 ms cadence was faster than remote STT and created a serialized
+    // backlog. Live browser transcription remains continuous; this is the
+    // network-backed fallback cadence.
+    recorder.start(800);
   } catch {
     recorder.start();
   }
@@ -1337,9 +1362,15 @@ async function ingestLiveSlice(blob, sourceId, generation) {
     if (other > peak * 1.35) return;
   }
   beginPendingStt();
+  const epoch = previewSttEpoch;
   try {
-    const text = await transcribeBlob(blob, { preview: true });
-    if (generation !== captureGeneration || !text) return;
+    const text = await transcribeBlob(blob, { preview: true, epoch });
+    if (
+      generation !== captureGeneration
+      || epoch !== previewSttEpoch
+      || !text
+      || (listenState !== "starting" && listenState !== "listening" && listenState !== "stopping" && listenState !== "flushing")
+    ) return;
     const merged = appendCapturedTranscript(liveTxText.value, text);
     if (!merged) return;
     setTranscriptDraft(merged);
@@ -1405,6 +1436,7 @@ async function startRecording() {
   const epoch = sessionEpoch;
   try {
     captureGeneration += 1;
+    previewSttEpoch += 1;
     const generation = captureGeneration;
     pendingAnalyzeOnStop = false;
     answerOnStopLock = false;
@@ -1506,6 +1538,8 @@ async function stopRecording() {
   const generation = captureGeneration;
   const epoch = sessionEpoch;
   const stoppedDuringStart = listenState === "starting";
+  const previewAtStop = currentTranscript();
+  startLatencyTrace();
   clearInterval(chunkTimer);
   chunkTimer = null;
   isRecording = false;
@@ -1515,6 +1549,11 @@ async function stopRecording() {
 
   stopLiveSpeech();
   stopRealtimeVoice(true);
+  previewSttEpoch += 1;
+  if (activePreviewSttController) {
+    try { activePreviewSttController.abort(); } catch { /* ignore */ }
+    activePreviewSttController = null;
+  }
   const micHandle = micCapture;
   const meetingHandle = meetingCapture;
   micCapture = null;
@@ -1534,10 +1573,29 @@ async function stopRecording() {
   }
 
   setListenPhase("flushing");
-  const [micBlob, meetingBlob] = await Promise.all([
+  const stoppedRecorders = Promise.all([
     stopSourceRecorder(micHandle),
     stopSourceRecorder(meetingHandle),
   ]);
+  const usableLiveTranscript = previewAtStop
+    && !isHallucinatedTranscript(previewAtStop)
+    && !isIncompleteQuestion(previewAtStop);
+
+  if (usableLiveTranscript) {
+    markLatency("FINAL_TRANSCRIPT", {
+      source: "live",
+      transcriptLength: previewAtStop.length,
+      pendingSttRequests: pendingSttCount,
+    });
+    void stoppedRecorders.then(() => {
+      markLatency("MICROPHONE_STOPPED");
+    });
+    await finishListenAndAnswer(previewAtStop);
+    return;
+  }
+
+  const [micBlob, meetingBlob] = await stoppedRecorders;
+  markLatency("MICROPHONE_STOPPED");
   if (sessionEnding || generation !== captureGeneration || epoch !== sessionEpoch) return;
 
   setListenPhase("waiting_stt");
@@ -1552,11 +1610,11 @@ async function stopRecording() {
   let sttFailed = false;
   try {
     if (primary.size >= 600) {
-      const finalText = await transcribeBlob(primary);
+      const finalText = await transcribeBlob(primary, { finalTrace: true });
       text = mergeSpokenTranscript(preview, finalText) || finalText || preview;
     }
     if (!text && secondary.size >= 600) {
-      const finalText = await transcribeBlob(secondary);
+      const finalText = await transcribeBlob(secondary, { finalTrace: true });
       text = mergeSpokenTranscript(preview, finalText) || finalText || preview;
     }
   } catch {
@@ -1567,6 +1625,11 @@ async function stopRecording() {
     audioFlushCompleted: true,
     partialTranscriptLength: preview.length,
     finalTranscriptLength: (text || "").length,
+    sttFailed,
+  });
+  markLatency("FINAL_TRANSCRIPT", {
+    source: "final-stt",
+    transcriptLength: (text || "").length,
     sttFailed,
   });
   await finishListenAndAnswer(text, { sttFailed });
@@ -1617,7 +1680,9 @@ async function finishListenAndAnswer(sourceText, { sttFailed = false } = {}) {
   pendingAnalyzeOnStop = false;
   stopRealtimeVoice();
 
+  markLatency("QUESTION_FINALIZER_START");
   const text = String(sourceText ?? currentTranscript()).replace(/\s+/g, " ").trim();
+  markLatency("QUESTION_FINALIZER_DONE", { transcriptLength: text.length });
   if (!text) {
     latestUtterance = "";
     micTranscriptText = "";
@@ -1678,6 +1743,7 @@ async function finishListenAndAnswer(sourceText, { sttFailed = false } = {}) {
       setLiveBadge("Captured", "captured");
     }
   } finally {
+    markLatency("ANSWER_COMPLETE");
     setListenPhase("idle");
     setListeningUI(false);
     answerOnStopLock = false;
@@ -2190,19 +2256,24 @@ function stopAudioPipeline() {
 }
 
 // ── Transcription ─────────────────────────────────────────────────────────────
-async function transcribeBlob(blob, { preview = false } = {}) {
+async function transcribeBlob(blob, { preview = false, epoch = previewSttEpoch, finalTrace = false } = {}) {
   if (isTranscribing) await waitForTranscriptionIdle(8000);
   if (isTranscribing) return "";
+  if (preview && epoch !== previewSttEpoch) return "";
   isTranscribing = true;
+  const controller = typeof AbortController === "function" ? new AbortController() : null;
+  if (preview) activePreviewSttController = controller;
 
   try {
     if (blob.size < 800) return "";
+    if (finalTrace) markLatency("FINAL_STT_CHUNK_SENT", { audioBytes: blob.size });
     const b64 = await blobToBase64(blob);
     const res = await api("POST", "/api/openai/transcribe", {
       audioBase64: b64,
       mimeType: blob.type,
       preview,
-    });
+    }, { signal: controller?.signal });
+    if (finalTrace) markLatency("FINAL_STT_RESPONSE_RECEIVED");
     const text = (res.transcript || "").replace(/\s+/g, " ").trim();
     return isHallucinatedTranscript(text) ? "" : text;
   } catch (err) {
@@ -2210,6 +2281,7 @@ async function transcribeBlob(blob, { preview = false } = {}) {
     if (!preview) throw err;
     return "";
   } finally {
+    if (preview && activePreviewSttController === controller) activePreviewSttController = null;
     isTranscribing = false;
   }
 }
@@ -2244,8 +2316,10 @@ async function analyze(utterance, { typed = false } = {}) {
   isAnalyzing = true;
   setAnalyzing(true);
 
+  markLatency("CODING_DETECTION_START");
   const codeRequest = /\b(write|show me|give me|paste)\b.{0,40}\b(code|sql|query|script|pyspark|python|scd)\b|\b(executable code|sql query to|pyspark code|python script|write a pyspark)\b/i.test(utterance)
     && !/\b(what do you mean|what is|what are|explain|define)\b/i.test(utterance);
+  markLatency("CODING_DETECTION_DONE", { coding: codeRequest });
   const context = [
     `ANSWER THIS: "${utterance.replace(/"/g, "'")}"`,
     sessionGuidance ? `Session guidance: ${sessionGuidance}` : "",
@@ -2300,6 +2374,11 @@ async function analyze(utterance, { typed = false } = {}) {
   };
 
   const requestStartedAt = Date.now();
+  markLatency("API_REQUEST_START", {
+    questionId,
+    generationId,
+    payloadBytes: new TextEncoder().encode(JSON.stringify(body)).length,
+  });
   const payloadBytes = new TextEncoder().encode(JSON.stringify(body)).length;
   console.info("Analyze request sizes", {
     questionId,
@@ -2312,10 +2391,25 @@ async function analyze(utterance, { typed = false } = {}) {
     stream: body.stream === true,
   });
   try {
+    let firstDeltaRendered = false;
     const result = await analyzeStreaming(body, (partial) => {
       if (sessionEnding || !sessionId || epoch !== sessionEpoch) return;
       if (!belongsToActive(partial)) return;
+      if (!firstDeltaRendered) {
+        markLatency("FRONTEND_FIRST_TOKEN_RECEIVED", {
+          questionId,
+          generationId,
+          requestToFirstTokenMs: Date.now() - requestStartedAt,
+          serverTiming: partial.timing || null,
+        });
+      }
       paintInsight(partial, false);
+      if (!firstDeltaRendered) {
+        firstDeltaRendered = true;
+        requestAnimationFrame(() => {
+          markLatency("FIRST_TOKEN_RENDERED", { questionId, generationId });
+        });
+      }
     }, myAbort?.signal);
     if (!result) return false;
     if (sessionEnding || !sessionId || epoch !== sessionEpoch) return false;
@@ -2785,11 +2879,12 @@ function showOutOfCredits() {
 }
 
 // ── API helper ────────────────────────────────────────────────────────────────
-async function api(method, path, body) {
+async function api(method, path, body, { signal } = {}) {
   const opts = { method, headers: new Headers({ "Content-Type": "application/json" }) };
   const token = authToken;
   if (token) opts.headers.set("Authorization", `Bearer ${token}`);
   if (body) opts.body = JSON.stringify(body);
+  if (signal) opts.signal = signal;
   const res = await fetch(apiUrl + path, opts);
   if (!res.ok) {
     const payload = await res.json().catch(() => null);

@@ -60,6 +60,16 @@ export type InterviewAnswerEval = {
   skippedLlm: boolean;
 };
 
+export type AnswerStreamTiming = {
+  finalizeMs: number;
+  classifyMs: number;
+  retrievalMs: number;
+  planMs: number;
+  generatorToOpenAiStartMs: number;
+  openAiToFirstRawTokenMs: number | null;
+  generatorToFirstVisibleDeltaMs: number;
+};
+
 const EMPTY_MODEL_ANSWER = "The model did not return an answer for this question. Please ask it again.";
 
 function extractJsonStringField(raw: string, field: string) {
@@ -193,19 +203,31 @@ export async function generateInterviewAnswer(args: {
   extraUserParts?: InterviewUserPart[];
   questionId?: string;
   generationId?: string;
-  onDelta?: (partial: string, meta?: { questionId: string; generationId: string }) => void;
+  onDelta?: (
+    partial: string,
+    meta?: { questionId: string; generationId: string; timing: AnswerStreamTiming },
+  ) => void;
+  onTiming?: (event: string, timing: Record<string, number | string | boolean | null>) => void;
 }): Promise<InterviewAnswerEval> {
   const started = Date.now();
   const identity = newQuestionIdentity(args.question);
   const questionId = args.questionId || identity.questionId;
   const generationId = args.generationId || identity.generationId;
-  const emit = (partial: string) => args.onDelta?.(partial, { questionId, generationId });
+  const mark = (event: string, timing: Record<string, number | string | boolean | null> = {}) => {
+    args.onTiming?.(event, { elapsedMs: Date.now() - started, ...timing });
+  };
+  let openAiStartedOffsetMs = 0;
+  let firstTokenMs: number | null = null;
+  mark("question_finalizer_start");
   const finalizeAt = Date.now();
   const question = unwrapAnswerThis(args.question);
   const finalizeMs = Date.now() - finalizeAt;
+  mark("question_finalizer_done", { durationMs: finalizeMs });
+  mark("question_analyzer_start");
   const classifiedAt = Date.now();
   const analysis = analyzeWithMemory(args.userId, question, args.sessionId);
   const classifyMs = Date.now() - classifiedAt;
+  mark("question_analyzer_done", { durationMs: classifyMs });
   const liveRequested = Boolean(args.live);
   const live = Boolean(liveRequested && process.env.OPENAI_API_KEY);
 
@@ -213,14 +235,31 @@ export async function generateInterviewAnswer(args: {
     return emptyEval({ questionId, generationId, question, analysis, finalizeMs, classifyMs, started, live: false });
   }
 
+  mark("retrieval_start");
   const retrievalAt = Date.now();
   const retrievalSubjects = matchingSubjects(question, analysis.topic);
   const retrieval = subjectContext(question, analysis.intent, analysis.topic);
   const retrievalMs = Date.now() - retrievalAt;
+  mark("retrieval_done", { durationMs: retrievalMs });
+  mark("answer_planner_start");
   const plannedAt = Date.now();
   const plan = planAnswer(analysis, args.persona);
   const planMs = Date.now() - plannedAt;
+  mark("answer_planner_done", { durationMs: planMs });
   const memoryCue = recallSessionMemory(args.userId, question, args.sessionId);
+  const emit = (partial: string) => args.onDelta?.(partial, {
+    questionId,
+    generationId,
+    timing: {
+      finalizeMs,
+      classifyMs,
+      retrievalMs,
+      planMs,
+      generatorToOpenAiStartMs: openAiStartedOffsetMs,
+      openAiToFirstRawTokenMs: firstTokenMs == null ? null : Math.max(0, firstTokenMs - openAiStartedOffsetMs),
+      generatorToFirstVisibleDeltaMs: Date.now() - started,
+    },
+  });
   const systemPrompt = buildAnalyzeSystemPrompt({
     analysis,
     plan,
@@ -231,7 +270,10 @@ export async function generateInterviewAnswer(args: {
     formatCue: answerFormatCue(question),
   });
 
+  mark("coding_detection_start");
+  const codingStartedAt = Date.now();
   const askedForCode = analysis.intent === "coding" || isCodeIntent(question);
+  mark("coding_detection_done", { durationMs: Date.now() - codingStartedAt, coding: askedForCode });
   const askedForPoints = isPointwiseQuestion(question);
   const spokenAnswer = !askedForCode;
   let rawAnswer = "";
@@ -239,7 +281,6 @@ export async function generateInterviewAnswer(args: {
   let parsedRecommended = "";
   let parsedKeyPoints: string[] = [];
   let sections: InterviewAnswerSection[] = [];
-  let firstTokenMs: number | null = null;
   let skippedLlm = !live;
 
   if (live) {
@@ -261,6 +302,8 @@ export async function generateInterviewAnswer(args: {
       ...(args.extraUserParts || []),
     ];
     const openAiStartedAt = Date.now();
+    openAiStartedOffsetMs = openAiStartedAt - started;
+    mark("openai_request_start", { model: resolveAnswerModel(args.model) });
     let raw = "";
     let lastPartial = "";
     try {
@@ -278,9 +321,14 @@ export async function generateInterviewAnswer(args: {
       for await (const chunk of completion) {
         const piece = chunk.choices[0]?.delta?.content ?? "";
         raw += piece;
-        if (piece && firstTokenMs == null) firstTokenMs = Date.now() - started;
+        if (piece && firstTokenMs == null) {
+          firstTokenMs = Date.now() - started;
+          mark("openai_first_token", {
+            openAiToFirstTokenMs: Math.max(0, firstTokenMs - openAiStartedOffsetMs),
+          });
+        }
         const partial = extractJsonStringField(raw, "answer");
-        if (partial.length >= 8 && partial !== lastPartial) {
+        if (partial.length >= 1 && partial !== lastPartial) {
           lastPartial = partial;
           emit(partial);
         }
@@ -401,6 +449,7 @@ export async function generateInterviewAnswer(args: {
     await rememberAnswer(args.userId, question, answer, analysis, args.sessionId, plan.candidateFactsSafe);
   }
 
+  mark("answer_complete", { totalMs: Date.now() - started });
   return {
     questionId,
     generationId,
