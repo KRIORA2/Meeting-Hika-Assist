@@ -2,7 +2,6 @@ import { createHash, randomBytes } from "node:crypto";
 import type { Request, Response, NextFunction } from "express";
 import { adminAuth, adminDb } from "./firebase";
 import { logger } from "./logger";
-import { ensureUserAccount } from "./store";
 
 const SESSION_TTL_MS = 1000 * 60 * 60 * 24 * 30;
 
@@ -17,6 +16,8 @@ declare global {
     interface Request {
       authUser?: AuthUser;
       authSessionId?: string;
+      authMs?: number;
+      backendReceivedAt?: number;
     }
   }
 }
@@ -71,7 +72,6 @@ async function getAuthFromFirebaseToken(token: string): Promise<AuthUser | null>
     const decoded = await adminAuth().verifyIdToken(token);
     const email = decoded.email?.trim().toLowerCase();
     if (!email) return null;
-    await ensureUserAccount(decoded.uid, email, providerFromFirebase(decoded.firebase?.sign_in_provider));
     return {
       id: decoded.uid,
       email,
@@ -99,7 +99,6 @@ async function getAuthFromDesktopToken(token: string, req: Request): Promise<Aut
     email: String(data.email || ""),
     provider: String(data.provider || "password"),
   };
-  await ensureUserAccount(user.id, user.email, user.provider);
   return user;
 }
 
@@ -120,12 +119,20 @@ export async function getAuthFromRequest(req: Request): Promise<AuthUser | null>
 }
 
 export async function requireAuth(req: Request, res: Response, next: NextFunction) {
+  const started = Date.now();
+  req.backendReceivedAt ??= started;
   try {
     const auth = await getAuthFromRequest(req);
+    req.authMs = Date.now() - started;
     if (!auth) {
       res.status(401).json({ error: "Unauthorized" });
       return;
     }
+    req.log.info({
+      event: "latency.auth_complete",
+      path: req.path,
+      authMs: req.authMs,
+    });
     next();
   } catch (error) {
     logger.error({ err: error }, "Auth verification failed");

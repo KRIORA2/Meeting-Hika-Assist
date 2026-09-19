@@ -790,7 +790,8 @@ router.post("/openai/prepare-persona", async (req, res) => {
 });
 
 router.post("/openai/analyze", async (req, res) => {
-  const analyzeStarted = Date.now();
+  const routeStarted = Date.now();
+  const analyzeStarted = req.backendReceivedAt || routeStarted;
   const analyzeRequestId = `anl_${analyzeStarted.toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
   // Audio -> STT (client) -> question -> analyzeQuestion + thread
   // -> planAnswer + subjectContext(intent) -> one streaming LLM call
@@ -813,7 +814,8 @@ router.post("/openai/analyze", async (req, res) => {
     requestId: analyzeRequestId,
     questionId,
     generationId,
-    elapsedMs: 0,
+    elapsedMs: routeStarted - analyzeStarted,
+    authMs: req.authMs || 0,
   });
 
   // Persona preparation is optional context. Start it beside the required
@@ -884,6 +886,7 @@ router.post("/openai/analyze", async (req, res) => {
     extraUserChars,
     uploadedDocCount: uploadedDocs?.length || 0,
     hasPersona: Boolean(persona),
+    authMs: req.authMs || 0,
     creditMs,
     personaMs,
     model: analysisModel,
@@ -935,6 +938,7 @@ router.post("/openai/analyze", async (req, res) => {
               model: analysisModel,
               timing: {
                 backendRequestToDeltaMs: backendDeltaAt - analyzeStarted,
+                authMs: req.authMs || 0,
                 creditMs,
                 personaMs,
                 ...(meta?.timing || {}),
@@ -951,6 +955,7 @@ router.post("/openai/analyze", async (req, res) => {
                 questionId,
                 generationId,
                 elapsedMs: backendDeltaAt - analyzeStarted,
+                authMs: req.authMs || 0,
                 creditMs,
                 personaMs,
                 ...(meta?.timing || {}),
