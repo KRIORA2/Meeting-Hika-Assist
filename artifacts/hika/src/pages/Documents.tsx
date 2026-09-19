@@ -149,7 +149,7 @@ export default function Documents() {
         >
           <Upload size={24} className="mx-auto mb-3 text-muted-foreground/40 group-hover:text-primary/50 transition-colors" />
           <p className="text-sm font-medium mb-1">Upload resume and optional JD</p>
-          <p className="text-xs text-muted-foreground">Hika reads them once, learns your skills, then answers as you. PDF, DOCX, TXT, MD — 3 files, 10 MB each</p>
+          <p className="text-xs text-muted-foreground">Hika reads them once, learns your skills, then answers as you. PDF, DOCX, TXT, MD — not old .doc. 3 files, 10 MB each</p>
           <input
             ref={fileInputRef}
             type="file"

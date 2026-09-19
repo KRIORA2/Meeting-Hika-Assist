@@ -4,6 +4,7 @@ import {
   isPointwiseQuestion,
   looksLikeUsEnglish,
   scoreEmployeeAnswer,
+  scoreSpokenStyle,
 } from "../../artifacts/api-server/src/lib/answer-quality.ts";
 import {
   FROZEN_INTERVIEW_PACK as pack,
@@ -29,6 +30,9 @@ assert.equal(isPointwiseQuestion("What are the main components of Azure Data Fac
 assert.equal(isPointwiseQuestion("What is Azure Data Factory?"), false);
 assert.equal(isPointwiseQuestion("Tell me about yourself"), false);
 assert.equal(isPointwiseQuestion("Write a PySpark query to read the data from the external storage"), false);
+assert.equal(isPointwiseQuestion("How do you implement incremental loading?"), false);
+assert.equal(isPointwiseQuestion("How do you optimize Databricks?"), false);
+assert.equal(isPointwiseQuestion("Walk me through your current project."), false);
 assert.equal(isCodeIntent("Could you please explain about data skew?"), false);
 assert.equal(isCodeIntent("So what do you mean by left join, right join and inner join?"), false);
 assert.equal(isCodeIntent("What is lake view and where we use this lake view?"), false);
@@ -93,14 +97,45 @@ assert.equal(
   "Invented S3 buckets must fail",
 );
 assert.equal(
-  scoreEmployeeAnswer("I know inner join keeps matching keys. Left join keeps the left table.").ok,
+  scoreEmployeeAnswer("An inner join is a type of join used in relational algebra and SQL.").ok,
   false,
   "Thin textbook answers without employee points must fail",
 );
 assert.equal(
-  scoreEmployeeAnswer("Azure Data Factory is essentially the orchestration service we use in Azure. In my current project we use it to land data in ADLS and trigger Databricks.").ok,
+  scoreEmployeeAnswer("The first thing I'd check is shuffle in the Spark UI before I resize the cluster. Memory pressure shows up as spill on the executors.").ok,
   true,
-  "Spoken conversation must pass",
+  "Bottleneck-first spoken answers must pass without 'for example'",
+);
+assert.equal(
+  scoreEmployeeAnswer("Delta Lake is essentially a transaction layer on lake storage. The useful part is that MERGE, updates and deletes become safe.").ok,
+  true,
+  "Spoken definitions must pass without forced first-person filler",
+);
+
+assert.equal(
+  scoreSpokenStyle("Databricks is a unified analytics platform that provides Spark.", "optimization").productPageOpener,
+  true,
+  "Product-page openings must flag on non-definition intents",
+);
+assert.equal(
+  scoreSpokenStyle("Delta Lake is essentially a transaction layer on lake storage. The useful part is MERGE.", "definition").productPageOpener,
+  false,
+  "Spoken definitions may open with the product name",
+);
+assert.equal(
+  scoreSpokenStyle("I'd start by identifying how the source exposes changes, then persist a watermark.", "how_to_implement").tutorialOpener,
+  false,
+  "Natural implementation openings must not be scored as tutorials",
+);
+assert.equal(
+  scoreSpokenStyle("To implement incremental loading, first create a watermark table.", "how_to_implement").tutorialOpener,
+  true,
+  "To implement… openings must flag on implementation intents",
+);
+assert.equal(
+  scoreSpokenStyle("Delta Lake is a great choice when you need reliable upserts.", "why").productPageOpener,
+  false,
+  "Spoken why answers may say 'X is a great choice'",
 );
 
 const stats = knowledgeStats();

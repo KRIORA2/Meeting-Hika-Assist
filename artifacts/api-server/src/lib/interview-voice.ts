@@ -6,7 +6,8 @@ import {
   subjectContext,
   knowledgeStats,
 } from "./subject-docs";
-import { isCodeIntent, isExperienceQuestion, isPointwiseQuestion } from "./answer-quality";
+import { isCodeIntent, isPointwiseQuestion } from "./answer-quality";
+import { detectIntent, type InterviewIntent } from "./question-analyzer";
 
 export type FrozenInterview = {
   id: string;
@@ -25,9 +26,10 @@ export {
   knowledgeStats,
 };
 
-export const CANDIDATE_IDENTITY = `You are Hika, an interview copilot. For every question the client asks, sound like a highly experienced employee answering that topic — not documentation, not study notes, not a special script for a few questions.
+export const CANDIDATE_IDENTITY = `You are Hika, an interview copilot. Think about the client's exact question, then answer that question — like a sharp engineer on a live call, not a résumé script and not a product page.
 Daily production: Azure Data Factory, Azure Databricks, PySpark, ADLS Gen2, Delta, Unity Catalog, Azure SQL, Key Vault, Azure Monitor, GitHub/Azure DevOps CI/CD.
-Same shape every time: explain the topic as someone who has done the work, then the complete process — point-wise if the question needs steps or types, paragraph-wise if it does not.
+Never start two answers the same way. Never open with job title or "In my role as…". Start with the mechanism, the decision, or the problem — not a brochure definition.
+Point-wise only for explicit lists (components, types, differences). Paragraph-wise for how / why / troubleshoot / design.
 Use frozen official docs for technical depth. Map other stacks. Do not invent employers, projects, incidents, Slack alerts, metrics, or file paths.
 If a path is needed, use an abfss:// example and say it is an example unless the resume has a real path. Never use s3a://my-bucket.
 Never start with Yeah, Yup, So basically, or Right so.
@@ -87,51 +89,68 @@ export type SpeakMode =
   | "behavioral"
   | "coding";
 
+export function speakModeFromIntent(intent: InterviewIntent): SpeakMode {
+  switch (intent) {
+    case "coding":
+      return "coding";
+    case "comparison":
+    case "tradeoff":
+    case "cost":
+      return "comparison";
+    case "troubleshooting":
+    case "debugging":
+    case "failure_handling":
+      return "troubleshooting";
+    case "architecture":
+    case "scalability":
+      return "architecture";
+    case "experience":
+      return "experience";
+    case "scenario":
+    case "how_to_identify":
+    case "how_to_implement":
+    case "how_to_process":
+    case "how_to_handle":
+    case "optimization":
+    case "example":
+      return "scenario";
+    default:
+      return "definition";
+  }
+}
+
 export function detectSpeakMode(question: string): SpeakMode {
-  const t = String(question || "").toLowerCase();
-  if (isCodeIntent(question)) return "coding";
-  if (/(difference between| vs\.? |versus|compare )/i.test(t)) return "comparison";
-  if (/(became slow|job failed|pipeline failed|troubleshoot|debug|root cause|what would you check)/i.test(t)) {
-    return "troubleshooting";
-  }
-  if (/(tell me about yourself|introduce yourself|challenge you faced|conflict|stakeholder)/i.test(t)) {
-    return "behavioral";
-  }
-  if (/(walk me through (your|the) (azure |data |end)|design a |10 tb|big.?data architecture|lakehouse architecture|end-to-end|end to end)/i.test(t)) {
-    return "architecture";
-  }
-  if (isExperienceQuestion(question) || /(in your (current )?project|how did you implement|how have you used)/i.test(t)) {
-    return "experience";
-  }
-  if (/(what would you do|how would you|suppose|if we (need|had)|scenario)/i.test(t)) return "scenario";
-  return "definition";
+  return speakModeFromIntent(detectIntent(question));
 }
 
 export function speakModeCue(mode: SpeakMode): string {
-  const every = "EVERY QUESTION: employee explanation first, then the complete process. Use points when the question has steps/types/components; paragraphs when it is a single idea.";
+  const every = "EVERY QUESTION: think first, then answer the exact ask. Do not reuse the last opener. Do not force first person. Job title only if they asked about you.";
   switch (mode) {
     case "definition":
-      return `${every} DEFINITION: What it is in my work, then how we typically use it and one production caveat.`;
+      return `${every} DEFINITION: What it is, then the useful part. Then stop. Not a product brochure.`;
     case "experience":
       return `${every} EXPERIENCE: A delivery flow, not a function catalog. Use the resume project if named. Never invent incidents.`;
     case "scenario":
-      return `${every} SCENARIO: How I'd approach it, then the steps I actually take, then a risk I watch.`;
+      return `${every} SCENARIO: How you'd approach it, then the steps, then a risk you watch.`;
     case "troubleshooting":
       return `${every} TROUBLESHOOTING: Investigate first. Isolate, fix, prevent. Do not invent a Slack alert.`;
     case "architecture":
-      return `${every} ARCHITECTURE: How data moves in my work, then ingestion/transform/serve points, then production trade-offs.`;
+      return `${every} ARCHITECTURE: Think out loud: I'd start with… then ingestion/transform/serve. Not a textbook.`;
     case "comparison":
-      return `${every} COMPARISON: I wouldn't treat them as direct alternatives. Then responsibilities and when I pick each.`;
+      return `${every} COMPARISON: I'd choose X when… Y when…. No absolute winner. Do not define both from scratch.`;
     case "behavioral":
-      return `${every} BEHAVIORAL: What I do in that situation, then what I did with the team, then what I learned. Never invent the story.`;
+      return `${every} BEHAVIORAL: What you do in that situation. Never invent the story.`;
     case "coding":
-      return `${every} CODING: Spoken employee explanation first. Then the query. Azure abfss example paths, never s3://my-bucket. One edge case.`;
+      return `${every} CODING: Working code in sections first. Then 1–2 spoken sentences and one edge case. Azure abfss example paths, never s3://my-bucket.`;
   }
 }
 
 export function answerFormatCue(question: string): string {
+  if (isCodeIntent(question)) {
+    return "FORMAT: CODE FIRST in sections. Then 1–2 spoken sentences covering the assumption and one edge case. No theory lecture before the code.";
+  }
   if (isPointwiseQuestion(question)) {
-    return "FORMAT: POINT-WISE. Short employee opener, then • points that complete the process. Each point is a spoken sentence. Not a function catalog.";
+    return "FORMAT: POINT-WISE. One sentence that answers THIS verb, then • points that complete the process. Each point is a spoken sentence. Not a function catalog. Not a job-title intro.";
   }
   return "FORMAT: PARAGRAPH-WISE. Complete process as spoken paragraphs. Do not use • bullets.";
 }

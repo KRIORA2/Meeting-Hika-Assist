@@ -362,6 +362,11 @@ export type SessionMemoryItem = {
   answer: string;
   subjects: string[];
   at: number;
+  topic?: string;
+  intent?: string;
+  fingerprint?: string;
+  concepts?: string[];
+  opener?: string;
 };
 
 export async function loadUserMemory(userId: string): Promise<SessionMemoryItem[]> {
@@ -372,18 +377,36 @@ export async function loadUserMemory(userId: string): Promise<SessionMemoryItem[
   return items
     .map((item: unknown): SessionMemoryItem | null => {
       if (!item || typeof item !== "object") return null;
-      const row = item as { question?: unknown; answer?: unknown; subjects?: unknown; at?: unknown };
+      const row = item as {
+        question?: unknown;
+        answer?: unknown;
+        subjects?: unknown;
+        at?: unknown;
+        topic?: unknown;
+        intent?: unknown;
+        fingerprint?: unknown;
+        concepts?: unknown;
+        opener?: unknown;
+      };
       const question = String(row.question || "").trim();
       const answer = String(row.answer || "").trim();
       if (!question || !answer) return null;
       const subjects = Array.isArray(row.subjects)
         ? (row.subjects as unknown[]).map((subject) => String(subject)).slice(0, 4)
         : [];
+      const concepts = Array.isArray(row.concepts)
+        ? (row.concepts as unknown[]).map((concept) => String(concept)).slice(0, 8)
+        : undefined;
       return {
         question: question.slice(0, 180),
         answer: answer.slice(0, 280),
         subjects,
         at: typeof row.at === "number" ? row.at : Date.now(),
+        topic: typeof row.topic === "string" ? row.topic.slice(0, 48) : undefined,
+        intent: typeof row.intent === "string" ? row.intent.slice(0, 48) : undefined,
+        fingerprint: typeof row.fingerprint === "string" ? row.fingerprint.slice(0, 80) : undefined,
+        concepts,
+        opener: typeof row.opener === "string" ? row.opener.slice(0, 160) : undefined,
       };
     })
     .filter((item: SessionMemoryItem | null): item is SessionMemoryItem => item !== null);

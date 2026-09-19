@@ -167,10 +167,10 @@ export default function Pricing() {
             </ul>
             <button
               onClick={() => void startCheckout("session")}
-              disabled={Boolean(busy)}
+              disabled={Boolean(busy) || !billingLive}
               className="mt-8 w-full rounded-xl border border-white/20 bg-white/10 py-2.5 text-sm font-semibold text-white disabled:opacity-50"
             >
-              {busy === "session" ? "Opening checkout…" : "Buy one session"}
+              {billingLive ? (busy === "session" ? "Opening checkout…" : "Buy one session") : "Checkout not live yet"}
             </button>
           </div>
 
@@ -194,11 +194,11 @@ export default function Pricing() {
             </ul>
             <button
               onClick={() => void startCheckout("pro")}
-              disabled={Boolean(busy) || isPro}
+              disabled={Boolean(busy) || isPro || !billingLive}
               className="mt-8 w-full rounded-xl py-2.5 text-sm font-semibold text-[#071529] disabled:opacity-50"
               style={{ background: "linear-gradient(135deg, #7486ff, #3be2ff)" }}
             >
-              {isPro ? "You're on Pro" : busy === "pro" ? "Opening checkout…" : `Upgrade ${interval === "year" ? "yearly" : "monthly"}`}
+              {isPro ? "You're on Pro" : !billingLive ? "Checkout not live yet" : busy === "pro" ? "Opening checkout…" : `Upgrade ${interval === "year" ? "yearly" : "monthly"}`}
             </button>
           </div>
         </div>

@@ -19,15 +19,71 @@ const FOREIGN_FUNCTION_WORDS = new Set([
 const HALLUCINATED_TRANSCRIPT = /thanks for watching|thank you for watching|please subscribe|the boy ran quickly|\[music\]|\[silence\]|rewrite:|clarifying:|greeting:|translation:|subtitle:|respond to /i;
 const TITLED_BOX = /^\s*(contextual explanation|cluster inventory confirmation|explanation|interview tip|follow-?up|details|notes|what is data skew.*|architecture|definition|implementation|best practices)\s*:?\s*$/im;
 const ALL_CAPS_TITLE = /^\s*[A-Z][A-Z0-9 /,&:\-]{10,}\s*$/m;
-const GENERIC_AI = /\b(as an ai|great question|based on the (information|conversation|transcript) provided|as a data engineer with \d+)\b|certainly[!.,]|passionate and results-driven|proven track record|organizational excellence|stakeholder management/i;
+const GENERIC_AI = /\b(as an ai|great question|based on the (information|conversation|transcript) provided|as a data engineer with \d+|in my role as an azure data engineer and databricks administrator)\b|certainly[!.,]|passionate and results-driven|proven track record|organizational excellence|stakeholder management|in conclusion|let'?s delve|first and foremost|there are several key (factors|points|aspects)/i;
 const EVASIVE = /\b(i['’]m not aware|not aware of any|check with the admin|absolutely sure|various best practices|comprehensive (suite|solution|platform)|interconnected components|limitless analytics|as of now)\b/i;
 const WIKIPEDIA_OPENER = /^(data skew is a (phenomenon|condition)|in distributed (computing|systems)|unity catalog is a (feature|governance)|a cluster is a set of|the medallion architecture is a data design|azure data factory consists of|apache kafka is a distributed event)/i;
 const CASUAL_OPENER = /^(yeah[,.]?\s+|yup[,.]?\s+|so basically[,.]?\s+|right,? so[,.]?\s+)/i;
-const SPOKEN_MARKER = /\b(I|I'm|I'd|I've|we|we're|we'd|I'll|for example|the reason|one (issue|challenge|thing)|first I'd|in that situation|from a production|in practice|I wouldn't|I'd (first|start|check|approach|use|look))\b/i;
+export const ROLE_TITLE_OPENER = /^(in my role as(?: an?)? |as an? )(azure data engineer|databricks administrator|senior data engineer|data engineer|technical lead)[^.]{0,240}\.\s*/i;
+const SPOKEN_MARKER = /\b(I|I'm|I'd|I've|we|we're|we'd|I'll|for example|the reason|one (issue|challenge|thing)|first I'd|in that situation|from a production|in practice|I wouldn't|I'd (first|start|check|approach|use|look)|the main (approach|thing|bottleneck|reason)|I (start|usually|typically))\b/i;
 const CATCH_PHRASE = /didn't catch a clear english question/i;
 const INVENTED_FICTION = /\bs3a:\/\/my-bucket\b|\bs3:\/\/my-bucket\b|\/\/my-bucket\/|i set up a slack alert|slack alert\b/i;
 const FUNCTION_CATALOG = /variety of (pyspark )?transformations|filter, select, withcolumn|withcolumn and withcolumnrenamed/i;
-const STRONG_POINT = /\b(for example|from a production|in practice|day to day|typically|the reason|I (use|used|wouldn't|usually|generally|also)|we (use|used|land|write|keep|run))\b/i;
+const STRONG_POINT = /\b(for example|from a production|in practice|day to day|typically|the reason|the main (approach|thing|bottleneck)|I (use|used|wouldn't|usually|generally|also|start)|we (use|used|land|write|keep|run))\b/i;
+const DOCUMENTATION_PATTERNS: RegExp[] = [
+  /\bis a (cloud[- ]based|unified|open[- ]source|end[- ]to[- ]end)\b/gi,
+  /\bis primarily used for\b/gi,
+  /\benables (users|organizations|businesses)\b/gi,
+  /\bthere are several (advantages|benefits|key)\b/gi,
+  /\bthe key benefits are\b/gi,
+  /\blet'?s (understand|discuss|delve|explore)\b/gi,
+  /\bin conclusion\b/gi,
+  /\bfirst and foremost\b/gi,
+  /\b(introduction|explanation|advantages|conclusion)\s*:/gi,
+];
+const GENERIC_OPENERS = [
+  /^(certainly|absolutely|great question|as mentioned|to begin with|without further ado)\b/i,
+];
+const PRODUCT_PAGE_OPENER = /^(databricks|azure data factory|microsoft fabric|snowflake|power bi|apache kafka|delta lake|unity catalog|adf)\b.{0,50}\bis (a |an )?(cloud[- ]based|cloud data|unified|open[- ]source|fully managed|end[- ]to[- ]end|analytics platform|business intelligence|data integration|data warehouse|storage layer)\b/i;
+const PRODUCT_IS_A_OPENER = /^(databricks|azure data factory|microsoft fabric|snowflake|power bi|apache kafka|delta lake|unity catalog|adf) is (a |an )(cloud[- ]based|unified|open[- ]source|fully managed|end[- ]to[- ]end|analytics|business intelligence|data (integration|warehouse|platform|lake)|storage layer)\b/i;
+const TO_IMPLEMENT_OPENER = /^to implement\b/i;
+
+export type SpokenStyleReport = {
+  firstPersonUsage: boolean;
+  documentationPatternCount: number;
+  bulletCount: number;
+  genericOpenerCount: number;
+  headingCount: number;
+  productPageOpener: boolean;
+  tutorialOpener: boolean;
+  documentationHeavy: boolean;
+};
+
+export function scoreSpokenStyle(answer: string, intent?: string): SpokenStyleReport {
+  const text = String(answer || "").trim();
+  const firstPersonUsage = /\b(I|I'm|I'd|I've|I'll|we|we're|we'd)\b/.test(text);
+  let documentationPatternCount = 0;
+  for (const pattern of DOCUMENTATION_PATTERNS) {
+    const re = new RegExp(pattern.source, pattern.flags);
+    const hits = text.match(re);
+    if (hits) documentationPatternCount += hits.length;
+  }
+  const bulletCount = (text.match(/^\s*(?:[-*]|•|\d+[.)])\s+/gm) || []).length;
+  const headingCount = (text.match(/^\s*(#{1,6}\s+|[A-Z][A-Za-z ]{3,40}:)\s*$/gm) || []).length;
+  const genericOpenerCount = GENERIC_OPENERS.filter((re) => re.test(text)).length;
+  const productPageOpener = intent !== "definition" && (PRODUCT_PAGE_OPENER.test(text) || PRODUCT_IS_A_OPENER.test(text));
+  const tutorialIntent = /^(how_to_|optimization|troubleshooting|scenario|architecture|failure_handling|follow_up|cost|scalability)/.test(String(intent || ""));
+  const tutorialOpener = tutorialIntent && TO_IMPLEMENT_OPENER.test(text);
+  return {
+    firstPersonUsage,
+    documentationPatternCount,
+    bulletCount,
+    genericOpenerCount,
+    headingCount,
+    productPageOpener,
+    tutorialOpener,
+    documentationHeavy: documentationPatternCount >= 2 || bulletCount >= 3 || headingCount >= 2 || genericOpenerCount > 0 || productPageOpener || tutorialOpener,
+  };
+}
 
 export function looksLikeUsEnglish(text: string) {
   const value = String(text || "").replace(/\s+/g, " ").trim();
@@ -50,7 +106,7 @@ export function looksLikeUsEnglish(text: string) {
 
 export function isProcessQuestion(text: string): boolean {
   const t = text.toLowerCase();
-  return /(how (can|do|would) (you|we)|handle this situation|provide access|grant access|onboard|new (resource|user|joiner|employee|engineer|hire)|give him access|give them access|workspace access|as an admin)/i.test(t);
+  return /(handle this situation|provide access|grant access|onboard|new (resource|user|joiner|employee|engineer|hire)|give him access|give them access|workspace access|as an admin)/i.test(t);
 }
 
 export function isMeaningQuestion(text: string): boolean {
@@ -70,14 +126,14 @@ export function isCodeIntent(text: string): boolean {
   const t = text.toLowerCase();
   if (isProcessQuestion(t)) return false;
   if (isMeaningQuestion(t)) return false;
-  return /(write (me )?(a |the )?(code|query|script|function)|give me (the )?(code|sql|query|script)|show me (the )?(code|sql|pyspark|query)|paste the (code|query)|executable code|implement (this|it) in|python script|pyspark (code|script)|sql query to|write a query|write the query|write a pyspark)/i.test(t);
+  return /(write (me )?(a |the )?(code|query|script|function|merge)|give me (the )?(code|sql|query|script)|show me (the )?(code|sql|pyspark|query)|paste the (code|query)|executable code|implement (this|it) in|python script|pyspark (code|script)|sql query to|write a query|write the query|write a pyspark|write a merge)/i.test(t);
 }
 
 export function isPointwiseQuestion(text: string): boolean {
   const t = String(text || "").toLowerCase();
   if (isCodeIntent(t)) return false;
   if (/(tell me about yourself|introduce yourself|why should we hire you)/i.test(t)) return false;
-  return /(what are the|list (the |out )?|components|types of|kinds of|steps|walk me through|end[- ]to[- ]end|difference between|\bvs\.?\b|versus|compare |advantages|disadvantages|pros and cons|left join|right join|inner join|transformations you have used|what (are|were) the transformations|bronze.{0,20}silver|how (do|did|would) you|how can you|stages|layers|where (do we|we) use)/i.test(t);
+  return /(what are the|list (the |out )?|components|types of|kinds of|what are (the )?(steps|stages|layers)|difference between|\bvs\.?\b|versus|compare |advantages|disadvantages|pros and cons|left join|right join|inner join|transformations you have used|what (are|were) the transformations|bronze.{0,20}silver)/i.test(t);
 }
 
 export function looksLikeCodeDump(text: string): boolean {
@@ -148,6 +204,7 @@ export function toSpokenAnswer(text: string, keepPoints = false) {
     .replace(ALL_CAPS_TITLE, "")
     .replace(/\*\*/g, "")
     .replace(CASUAL_OPENER, "")
+    .replace(ROLE_TITLE_OPENER, "")
     .trim();
 
   if (!cleaned) return "";
@@ -185,12 +242,7 @@ export function toSpokenAnswer(text: string, keepPoints = false) {
   const opener = ensurePeriod(lines[0]);
   const rest = lines.slice(1).map((line) => ensurePeriod(line));
   if (rest.length === 1) return `${opener} ${rest[0]}`.replace(/\s+/g, " ").trim();
-  if (rest.length === 2) {
-    return `${opener} For example, ${lowerFirst(rest[0])} ${rest[1]}`.replace(/\s+/g, " ").trim();
-  }
-  const mid = rest.slice(0, -1).map((line, index) => (index === 0 ? lowerFirst(line) : line)).join(" ");
-  const last = lowerFirst(rest[rest.length - 1]);
-  return `${opener} For example, ${mid} From a production perspective, ${last}`.replace(/\s+/g, " ").trim();
+  return `${opener} ${rest.join(" ")}`.replace(/\s+/g, " ").trim();
 }
 
 /** @deprecated Use toSpokenAnswer. Kept so older call sites keep compiling. */
@@ -207,6 +259,7 @@ export function scoreEmployeeAnswer(answer: string, askedForCode = false, keepPo
   const text = String(answer || "").trim();
   if (!text) return { ok: false, reason: "empty" };
   if (CATCH_PHRASE.test(text)) return { ok: true, reason: "ok" };
+  if (ROLE_TITLE_OPENER.test(text)) return { ok: false, reason: "generic_ai" };
   if (INVENTED_FICTION.test(text)) return { ok: false, reason: "invented" };
   if (!askedForCode && FUNCTION_CATALOG.test(text)) return { ok: false, reason: "generic_ai" };
   if (!askedForCode && looksLikeCodeDump(text)) return { ok: false, reason: "code_dump" };
@@ -215,8 +268,10 @@ export function scoreEmployeeAnswer(answer: string, askedForCode = false, keepPo
   if (!askedForCode && !keepPoints && looksLikeBulletNotes(text)) return { ok: false, reason: "bullet_notes" };
   if (!askedForCode && WIKIPEDIA_OPENER.test(text)) return { ok: false, reason: "wikipedia_paragraph" };
   if (!askedForCode && CASUAL_OPENER.test(text)) return { ok: false, reason: "generic_ai" };
-  if (!askedForCode && !SPOKEN_MARKER.test(text)) return { ok: false, reason: "wikipedia_paragraph" };
-  if (!askedForCode && !keepPoints && looksThinInterview(text)) return { ok: false, reason: "wikipedia_paragraph" };
-  if (!askedForCode && !STRONG_POINT.test(text) && !(keepPoints && /•/.test(text))) return { ok: false, reason: "wikipedia_paragraph" };
+  const hasSpokenPoints = keepPoints && /(?:^|\n)\s*(?:[-*]|•|\d+[.)])\s+\S/m.test(text);
+  if (!askedForCode && !hasSpokenPoints && looksThinInterview(text)) return { ok: false, reason: "wikipedia_paragraph" };
+  if (!askedForCode && /\bare both\b.{0,60}\b(solutions|platforms|tools|services)\b/i.test(text) && looksThinInterview(text)) {
+    return { ok: false, reason: "wikipedia_paragraph" };
+  }
   return { ok: true, reason: "ok" };
 }

@@ -107,3 +107,6 @@ typings/
 # Publishable desktop download assets (required by /install page)
 !artifacts/hika/public/downloads/
 !artifacts/hika/public/downloads/windows/
+
+# Live GPT evaluation output (answers, keys never stored)
+scripts/eval-live-results.json

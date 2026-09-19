@@ -6,5 +6,5 @@
     "types": ["node"]
   },
   "include": ["src"],
-  "exclude": ["src/verify-answer-quality.ts"]
+  "exclude": ["src/verify-answer-quality.ts", "src/verify-interview-intelligence.ts", "src/eval-live-answers.ts"]
 }

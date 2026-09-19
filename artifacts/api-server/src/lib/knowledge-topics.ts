@@ -202,6 +202,50 @@ export const KNOWLEDGE_TOPICS: KnowledgeTopic[] = [
       fundamentals: "Delta is ACID tables on Parquet with a transaction log. MERGE, UPDATE, DELETE, time travel, vacuum.",
       production: "Idempotent MERGE on a business key. Streaming source/sink with a checkpoint. OPTIMIZE and ZORDER for reads — not on every tiny write.",
       tradeoffs: "Delta for the lakehouse. Warehouse tables when the consumer is pure T-SQL with multi-table transactions.",
+      troubleshooting: "Failed MERGE: check the transaction log with DESCRIBE HISTORY, retry the same keys. Do not rewrite Parquet files by hand.",
+    },
+  },
+  {
+    id: "dlt",
+    title: "Delta Live Tables / Lakeflow",
+    sources: ["https://learn.microsoft.com/en-us/azure/databricks/delta-live-tables/"],
+    keywords: ["delta live tables", "dlt", "lakeflow", "pipeline expectation", "streaming table"],
+    extras: ["delta", "databricks"],
+    slices: {
+      fundamentals: "Declarative pipelines: streaming tables or materialized views with expectations for data quality.",
+      production: "Expectations can fail the pipeline or drop/quarantine bad rows. Checkpointing is owned by the pipeline, not a hand-rolled notebook path.",
+      tradeoffs: "Use when the org wants managed orchestration and quality rules. Notebook jobs still win for one-off or highly custom Spark.",
+    },
+  },
+  {
+    id: "incremental",
+    title: "Incremental loads / CDC / watermarks",
+    sources: [
+      "https://learn.microsoft.com/en-us/azure/data-factory/tutorial-incremental-copy-overview",
+      "https://docs.delta.io/latest/delta-update.html",
+    ],
+    keywords: [
+      "incremental", "incremental load", "incremental loads", "watermark", "cdc",
+      "change data capture", "change tracking", "full load", "late arriving", "idempotent load",
+    ],
+    extras: ["adf", "delta", "databricks"],
+    slices: {
+      fundamentals: "Incremental load copies only new or changed rows. The change boundary is a watermark, CDC position, or a reliable updated-at column. Full load rewrites everything.",
+      production: "Identify changes from the source signal. Pass the watermark into the source query. Land in ADLS, MERGE in Databricks, then advance the watermark only after the target commit succeeds.",
+      architecture: "ADF Lookup last watermark, parameterized Copy, bronze landing, Databricks Delta MERGE on business keys, control table for the high-water mark.",
+      troubleshooting: "If the job fails after MERGE but before watermark update, rerun is safe when MERGE is idempotent. Never advance the watermark on a failed run or you skip rows. Late arriving data uses a lookback window.",
+      tradeoffs: "Watermark is simple but misses in-place updates if the timestamp is wrong. CDC is accurate and heavier. Full reload is the recovery path when the boundary is untrusted.",
+    },
+  },
+  {
+    id: "scd",
+    title: "Slowly changing dimensions",
+    sources: ["https://learn.microsoft.com/en-us/azure/databricks/delta/delta-update"],
+    keywords: ["scd", "slowly changing", "type 2", "type ii", "scd2"],
+    extras: ["delta", "sql"],
+    slices: {
+      fundamentals: "SCD Type 2 keeps history: expire the current row, insert a new version with effective dates or a current flag. Type 1 overwrites.",
+      production: "MERGE on the business key. When attributes change, set end_date on the current row and insert the new version. Incremental loads feed this MERGE.",
     },
   },
   {
@@ -332,6 +376,22 @@ export const KNOWLEDGE_TOPICS: KnowledgeTopic[] = [
       fundamentals: "Storage separate from virtual warehouses. COPY INTO / Snowpipe. Roles, not users.",
       architecture: "Same bronze/silver/gold as schemas. MERGE, Streams and Tasks. Scale up for a job, auto-suspend after.",
       tradeoffs: "Azure is daily. This is how the medallion pattern maps. Do not invent a Snowflake employer.",
+    },
+  },
+  {
+    id: "powerbi",
+    title: "Power BI",
+    sources: [
+      "https://learn.microsoft.com/en-us/power-bi/fundamentals/",
+      "https://learn.microsoft.com/en-us/power-bi/guidance/star-schema",
+      "https://learn.microsoft.com/en-us/power-bi/connect-data/incremental-refresh-overview",
+    ],
+    keywords: ["power bi", "powerbi", "dax", "directquery", "direct lake", "incremental refresh", "query folding", "row-level security", "rls"],
+    extras: ["sql", "fabric"],
+    slices: {
+      fundamentals: "Semantic model plus report. Star schema: facts at a grain, dimensions around them. Measures in DAX, not calculated columns for everything.",
+      production: "Import for speed when data fits. DirectQuery when freshness beats cache. Direct Lake on Fabric Delta. Incremental refresh needs a date column and query folding.",
+      tradeoffs: "RLS filters rows in the model. Slow reports are usually the model or folding, not a visual.",
     },
   },
   {

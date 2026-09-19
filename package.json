@@ -12,7 +12,8 @@
     "typecheck:libs": "tsc --build --force",
     "verify:realtime": "node scripts/verify-realtime-security.mjs",
     "typecheck": "pnpm run typecheck:libs && pnpm -r --filter \"./artifacts/**\" --filter \"./scripts\" --if-present run typecheck",
-    "verify:answers": "pnpm --filter @workspace/scripts exec tsx src/verify-answer-quality.ts"
+    "verify:answers": "pnpm --filter @workspace/scripts exec tsx src/verify-answer-quality.ts && pnpm --filter @workspace/scripts exec tsx src/verify-interview-intelligence.ts",
+    "verify:live-answers": "pnpm --filter @workspace/scripts exec tsx src/eval-live-answers.ts"
   },
   "private": true,
   "devDependencies": {

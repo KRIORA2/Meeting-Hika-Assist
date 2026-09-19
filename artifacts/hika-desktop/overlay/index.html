@@ -25,7 +25,7 @@
       <button id="install-update-btn" class="update-action" type="button" hidden>Install update &amp; restart</button>
       <p id="update-status" class="update-status">Updates install from GitHub Releases.</p>
       <button id="open-dashboard-btn" type="button">Open dashboard</button>
-      <p class="menu-toggle">Private overlay <strong>On</strong></p>
+      <p class="menu-toggle">Private overlay — always on, excluded from screen share</p>
       <button id="menu-logout-btn" class="menu-danger" type="button">Log out</button>
     </div>
   </div>
@@ -113,16 +113,15 @@
       <div class="setup-section">
         <div class="setup-section-head"><span>Context</span><span id="setup-uploaded-list">No documents added</span></div>
         <div class="context-actions">
-          <label class="context-action"><input id="resume-upload" type="file" accept=".pdf,.doc,.docx,.txt,.md" />Add resume</label>
+          <label class="context-action"><input id="resume-upload" type="file" accept=".pdf,.docx,.txt,.md" />Add resume</label>
           <label class="context-action"><input id="setup-doc-upload" type="file" accept=".pdf,.docx,.txt,.md,.json,.csv" multiple />Add JD (optional)</label>
         </div>
         <textarea id="session-guidance" class="name-input" rows="4" placeholder="Optional extra notes. Resume and JD are enough — Hika answers as you."></textarea>
       </div>
 
       <div class="setup-section two-column">
-        <label><span class="setup-label">Output model</span><select id="model-select" class="setup-select"><option value="gpt-4o">GPT-4o (fast)</option><option value="gpt-4.1">GPT-4.1</option></select></label>
-        <label><span class="setup-label">Language</span><select id="output-language" class="setup-select"><option value="US English" selected>US English</option></select></label>
-      </div>
+          <label><span class="setup-label">Output model</span><select id="model-select" class="setup-select"><option value="gpt-4o">GPT-4o (fast)</option><option value="gpt-4.1">GPT-4.1</option></select></label>
+        </div>
 
       <div class="behavior-row"><div><strong>Answer on stop</strong><span>When you stop the mic, analyze the captured transcript immediately</span></div><label class="switch"><input id="auto-answer" type="checkbox" checked /><span></span></label></div>
       <div class="behavior-row"><div><strong>Save transcript</strong><span>Keep this session in your history</span></div><label class="switch"><input id="save-transcript" type="checkbox" checked /><span></span></label></div>
@@ -187,8 +186,8 @@
       <section class="ai-pane">
         <div class="pane-hdr">
           <span class="pane-lbl">Answer</span>
-          <select id="lang-filter" class="lang-select" title="Filter by language">
-            <option value="all">All</option>
+          <select id="lang-filter" class="lang-select" title="Show only answers that include this code language">
+            <option value="all">All answers</option>
             <option value="sql">SQL</option>
             <option value="python">Python</option>
             <option value="pyspark">PySpark</option>

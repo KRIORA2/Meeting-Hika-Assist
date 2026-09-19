@@ -59,6 +59,8 @@ let realtimeResponseRequested = false;
 let pendingAnalyzeOnStop = false;
 let answerOnStopLock = false;
 let listenFinalizeTimer = null;
+let lastTranscriptAt = 0;
+const QUESTION_STABLE_MS = 180;
 let forceHttpFallback = false;
 const useRealtimeVoice = false;
 const realtimeMetrics = {};
@@ -163,7 +165,7 @@ const desktopSigninStatus = $("desktop-signin-status");
 const minimizedLauncher = $("minimized-launcher");
 const jobPostUrl      = $("job-post-url");
 const modelSelect     = $("model-select");
-const outputLanguage  = $("output-language");
+const outputLanguage  = null;
 const autoAnswer      = $("auto-answer");
 const saveTranscript  = $("save-transcript");
 const setupUploadedList = $("setup-uploaded-list");
@@ -399,6 +401,7 @@ function closeAccountMenu() {
 function setTranscriptDraft(value, { syncAsk = false } = {}) {
   if (liveTxEl) liveTxEl.style.display = "flex";
   liveTxText.value = value;
+  lastTranscriptAt = Date.now();
   if (syncAsk) askInput.value = value;
 }
 
@@ -485,6 +488,10 @@ async function uploadDocuments(files, listElement) {
   }
   const toUpload = [];
   for (const file of files) {
+    if (/\.doc$/i.test(file.name) && !/\.docx$/i.test(file.name)) {
+      showToast("Use PDF or DOCX for resume. Old .doc files are not supported.");
+      return;
+    }
     if (file.size > 10 * 1024 * 1024) {
       showToast(`${file.name} is larger than 10 MB.`);
       return;
@@ -556,7 +563,30 @@ function looksLikeUsEnglish(text) {
 
 function isReadyQuestion(text) {
   const value = String(text || "").replace(/\s+/g, " ").trim();
-  return value.split(/\s+/).filter(Boolean).length >= 6 && looksLikeUsEnglish(value) && !isHallucinatedTranscript(value);
+  return value.split(/\s+/).filter(Boolean).length >= 6 && looksLikeUsEnglish(value) && !isHallucinatedTranscript(value) && !isIncompleteQuestion(value);
+}
+
+function isIncompleteQuestion(text) {
+  const value = String(text || "").replace(/\s+/g, " ").trim();
+  if (!value) return true;
+  if (/^(how would you|how do you|how can you|what about|can you|could you|walk me through|so how|and then|what if|suppose)(\s+(handle|do|implement|process|deal with|make|use|choose))?(\s+a)?\s*[.?,]*$/i.test(value)) {
+    return true;
+  }
+  // Keep in sync with artifacts/api-server/src/lib/question-finalizer.ts
+  if (/\b(how would you|how do you|how can you)\s*$/i.test(value)) return true;
+  if (/\.{2,}$|…$/.test(value)) return true;
+  if (/\b(the|a|an|to|for|with|of|and|or|if)\s*[.?,]*$/i.test(value)) return true;
+  const words = value.split(/\s+/);
+  if (words.length <= 3 && /^(how|what|why|can|could|walk)\b/i.test(value) && !/[?]/.test(value)) return true;
+  if (
+    words.length < 7
+    && /^(how|what|why|can you)\b/i.test(value)
+    && !/[?]/.test(value)
+    && !/\b(fail|merge|load|skew|join|lake|factory|spark|sql|cdc|watermark|delta|adf|pipeline|fabric|snowflake|kafka)\b/i.test(value)
+  ) {
+    return true;
+  }
+  return false;
 }
 
 function isHallucinatedTranscript(text) {
@@ -981,20 +1011,20 @@ async function handleStart() {
   const jobContext = (jobPostUrl?.value || "").trim();
   const languageContext = "Write the transcript and every answer in US English with American spelling. Never use Hindi or any other language.";
   sessionGuidance = [
-    "Same answer shape every question: open as a real working employee, then POINT-WISE if they asked for steps/types/components, PARAGRAPH-WISE if they asked for one idea. No Yeah.",
-    "Every question — technical, scenario, access, behavioral, definition — first person, how I actually do this at work, then production points.",
+    "Think about THIS question and answer it. Do not reuse the last opener or a job-title bio.",
+    "POINT-WISE if they asked for steps/types/components. PARAGRAPH-WISE if they asked for one idea. No Yeah.",
     "No headings, no textbook dump, no REST/SCIM/placeholder Python unless they asked for that script.",
-    "If they asked for a query or script: employee explanation first, then full real production SQL/PySpark.",
+    "If they asked for a query or script: short why, then full real production SQL/PySpark.",
     selectedSessionMode === "interview"
-      ? "This is a live interview. Answer the interviewer as the candidate — direct talking points, not a lecture."
+      ? "This is a live interview. Answer the interviewer as the candidate — think, then talk, not a lecture."
       : "This is a live work meeting. Answer as this person talking to teammates — short, decisive talking points.",
     jobContext ? `Job description / role context:\n${jobContext}` : "",
     languageContext,
     (sessionGuidanceEl?.value || "").trim()
       ? `User persona prompt (follow strictly):\n${(sessionGuidanceEl?.value || "").trim()}`
       : uploadedDocs.length
-        ? "A resume is uploaded. Answer as that person using their skills, expertise, and projects."
-        : "If a resume is uploaded, review it and answer as that professional.",
+        ? "A resume is uploaded. Use it for facts about this person. Do not paste the résumé as the start of every answer."
+        : "If a resume is uploaded, use it for facts, not as a repeated intro.",
   ].filter(Boolean).join("\n");
   forceHttpFallback = false;
   cancelledRealtimeResponseIds.clear();
@@ -1377,7 +1407,7 @@ async function stopRecording() {
   ]);
 
   if (previewReady) {
-    void finishListenAndAnswer(preview);
+    scheduleFinishListen(preview);
     void blobsPromise;
     return;
   }
@@ -1394,6 +1424,22 @@ async function stopRecording() {
   if (!text && secondary.size >= 600) text = await transcribeBlob(secondary);
   if (!text && preview && looksLikeUsEnglish(preview)) text = preview;
   await finishListenAndAnswer(text);
+}
+
+function scheduleFinishListen(text) {
+  if (listenFinalizeTimer) {
+    clearTimeout(listenFinalizeTimer);
+    listenFinalizeTimer = null;
+  }
+  const wait = Math.max(0, QUESTION_STABLE_MS - (Date.now() - lastTranscriptAt));
+  if (wait <= 16 || isIncompleteQuestion(text)) {
+    void finishListenAndAnswer(text);
+    return;
+  }
+  listenFinalizeTimer = setTimeout(() => {
+    listenFinalizeTimer = null;
+    void finishListenAndAnswer(currentTranscript() || text);
+  }, wait);
 }
 
 function stopRealtimeVoice(closedByUser = true) {
@@ -1433,6 +1479,17 @@ async function finishListenAndAnswer(sourceText) {
     statusDot.textContent = "● Ready";
     statusDot.className = "status-dot";
     showToast("Didn't catch a clear English question. Say the full question, then Stop.");
+    answerOnStopLock = false;
+    return;
+  }
+  if (isIncompleteQuestion(text)) {
+    latestUtterance = text;
+    micTranscriptText = text;
+    setTranscriptDraft(text);
+    setLiveBadge("Incomplete");
+    statusDot.textContent = "● Ready";
+    statusDot.className = "status-dot";
+    showToast("That sounded incomplete. Press Listen until they finish the question.");
     answerOnStopLock = false;
     return;
   }
@@ -1996,6 +2053,10 @@ async function analyze(utterance) {
     showToast("Didn't catch clear US English. Press Listen when they ask again.");
     return false;
   }
+  if (isIncompleteQuestion(utterance)) {
+    showToast("That sounded incomplete. Wait until they finish the question.");
+    return false;
+  }
   const epoch = sessionEpoch;
   isAnalyzing = true;
   setAnalyzing(true);
@@ -2006,8 +2067,8 @@ async function analyze(utterance) {
     `ANSWER THIS: "${utterance.replace(/"/g, "'")}"`,
     sessionGuidance ? `Session guidance: ${sessionGuidance}` : "",
     uploadedDocs.length
-      ? "Answer as the uploaded resume candidate. Use their skills and expertise with frozen technical knowledge."
-      : "Same shape every question: real-employee opener, then POINT-WISE for steps/types/components or PARAGRAPH-WISE for one idea. Do not invent employers, incidents, or file paths.",
+      ? "Use the resume for facts about this person. For technical questions, think and answer THIS ask — do not repeat a job-title intro."
+      : "Think about THIS question and answer it. Do not reuse the previous opener.",
     codeRequest
       ? "They asked for a query or script. Employee explanation first, then complete production code. Use abfss example paths, never s3://my-bucket."
       : "",
@@ -2308,7 +2369,7 @@ function collectCodeBlocks(ins) {
 function matchesLanguageFilter(ins) {
   if (langFilter === "all") return true;
   const blocks = collectCodeBlocks(ins);
-  if (!blocks.length) return false;
+  if (!blocks.length) return true;
   return blocks.some((b) => {
     const l = normalizeLanguage(b.language);
     if (langFilter === "pyspark") return l === "python" && /spark\./i.test(b.content);

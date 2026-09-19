@@ -15,7 +15,7 @@ import { getAuthSession } from "@/lib/auth";
 const sections = [
   {
     items: [
-      { name: "Home", href: "/", icon: Home },
+      { name: "Home", href: "/dashboard", icon: Home },
       { name: "Dashboard", href: "/dashboard", icon: LayoutDashboard },
       { name: "New Session", href: "/session", icon: Plus, accent: true },
     ],

@@ -3,6 +3,13 @@ import { extractDocumentTextFromBuffer } from "./document-text";
 
 export type PersonaDoc = { id?: string; name?: string };
 
+export type CandidateFact = {
+  fact: string;
+  source: string;
+  confidence: number;
+  kind: "skill" | "project" | "employer" | "years" | "tool";
+};
+
 export type PersonaCard = {
   card: string;
   name: string;
@@ -10,6 +17,9 @@ export type PersonaCard = {
   hasResume: boolean;
   hasJd: boolean;
   docIds: string[];
+  facts: CandidateFact[];
+  experienceYears: number | null;
+  technologies: string[];
 };
 
 const SKILL_TERMS = [
@@ -127,20 +137,62 @@ function jdSignal(text: string): string {
   return keep.join(" ").replace(/\s+/g, " ").trim().slice(0, 500);
 }
 
+function extractYears(text: string): number | null {
+  const match = text.match(/(\d{1,2})\+?\s+years?/i);
+  if (!match) return null;
+  const years = Number.parseInt(match[1] || "", 10);
+  return Number.isFinite(years) ? years : null;
+}
+
+function buildFacts(args: {
+  sourceName: string;
+  skills: string[];
+  resume: string;
+  years: number | null;
+}): CandidateFact[] {
+  const facts: CandidateFact[] = args.skills.slice(0, 12).map((skill) => ({
+    fact: `Worked with ${skill}`,
+    source: args.sourceName || "resume",
+    confidence: 0.9,
+    kind: "skill" as const,
+  }));
+  if (args.years) {
+    facts.unshift({
+      fact: `${args.years}+ years of experience`,
+      source: args.sourceName || "resume",
+      confidence: 0.8,
+      kind: "years",
+    });
+  }
+  const projectHits = args.resume.match(/\b((?:implemented|designed|built|migrated|led) [^.]{12,80})/gi) || [];
+  for (const hit of projectHits.slice(0, 4)) {
+    facts.push({
+      fact: hit.replace(/\s+/g, " ").trim(),
+      source: args.sourceName || "resume",
+      confidence: 0.7,
+      kind: "project",
+    });
+  }
+  return facts.slice(0, 16);
+}
+
 function buildCard(args: {
   name: string;
   headline: string;
   skills: string[];
   resume: string;
   jd: string;
+  facts: CandidateFact[];
 }): string {
+  const factLines = args.facts.slice(0, 8).map((fact) => `- ${fact.fact} [${fact.source}]`);
   const lines = [
     args.name ? `Name: ${args.name}` : "",
     args.headline ? `Profile: ${args.headline}` : "",
     args.skills.length ? `Skills and expertise: ${args.skills.join(", ")}` : "",
+    factLines.length ? `Grounded facts:\n${factLines.join("\n")}` : "",
     args.resume ? `Resume evidence:\n${args.resume}` : "",
     args.jd ? `This job description (optional, tilt answers toward this role without inventing JD-only experience):\n${args.jd}` : "",
-    "Speak as this person. Use their real skills and employers. Combine this with frozen technical knowledge. If the resume does not support a claim, answer as professional practice on their stack — never invent a company, project, or metric.",
+    "Speak as this person when they ask about you. For technical questions, answer the mechanism — never open with job title or In my role as. If a fact is missing, say 'A production approach is…'.",
   ].filter(Boolean);
   return lines.join("\n").slice(0, 1400);
 }
@@ -185,18 +237,29 @@ export async function preparePersona(
 
     const source = resumeText || jdText;
     const skills = extractSkills(`${resumeText} ${jdText}`);
+    const years = extractYears(source);
+    const facts = buildFacts({
+      sourceName: fileNameHint || "resume",
+      skills,
+      resume: resumeSignal(resumeText || source),
+      years,
+    });
     const card: PersonaCard = {
       name: extractName(resumeText) || extractName(source),
       skills,
       hasResume: Boolean(resumeText),
       hasJd: Boolean(jdText),
       docIds,
+      facts,
+      experienceYears: years,
+      technologies: skills.slice(0, 12),
       card: buildCard({
         name: extractName(resumeText) || extractName(source),
         headline: extractHeadline(source) || fileNameHint,
         skills,
         resume: resumeSignal(resumeText || source),
         jd: jdText ? jdSignal(jdText) : "",
+        facts,
       }),
     };
     const previous = latestByUser.get(userId);

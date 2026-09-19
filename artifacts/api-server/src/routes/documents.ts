@@ -32,7 +32,8 @@ router.post("/documents", async (req, res) => {
       }
       const ext = path.extname(name).toLowerCase();
       if (!ALLOWED_EXTENSIONS.has(ext)) {
-        res.status(415).json({ error: `Unsupported document type: ${ext || "unknown"}` });
+        const hint = ext === ".doc" ? " Save as .docx or PDF and try again." : "";
+        res.status(415).json({ error: `Unsupported document type: ${ext || "unknown"}.${hint}` });
         return;
       }
       const buffer = Buffer.from(content, "base64");

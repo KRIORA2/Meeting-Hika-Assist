@@ -21,6 +21,7 @@ import {
 import { cn } from "@/lib/utils";
 import { getAccessToken } from "@/lib/auth";
 import { prepareInterviewPersona } from "@/lib/prepare-persona";
+import { isIncompleteQuestion } from "@/lib/question-finalizer";
 import InsightAnswer from "@/components/InsightAnswer";
 import { acceptsRealtimeResponseEvent, appendRealtimeDelta } from "@/services/realtimeProtocol";
 
@@ -991,6 +992,10 @@ function PiPContent({
     // transcript = fallback full text
     const latestText = utterance ?? question ?? opts.transcript ?? transcriptRef.current;
     if (!latestText) return;
+    if (isIncompleteQuestion(latestText)) {
+      setMicError("That sounded incomplete. Press Listen until they finish the question.");
+      return;
+    }
     isAnalyzingRef.current = true;
     setIsAnalyzing(true);
     setAnswerReady(false);
@@ -1023,7 +1028,7 @@ function PiPContent({
       sessionMode === "interview"
         ? "Interview: answer as the candidate, first person, like a real senior data engineer speaking on the call."
         : "Meeting: answer as this person talking to teammates. Decisive, current, first person.",
-      "Every question: employee opener first. POINT-WISE if they asked for steps, types, or components. PARAGRAPH-WISE if it is one idea. Queries get that spoken process plus real SQL.",
+      "Every question: think, then answer the exact ask. POINT-WISE if they asked for steps, types, or components. PARAGRAPH-WISE if it is one idea. Never open with job title.",
     ].filter(Boolean).join("\n");
 
     const ctx = utterance
@@ -1638,6 +1643,11 @@ function PiPContent({
         liveTranscriptRef.current = null;
         setLiveTranscript(null);
 
+        if (isIncompleteQuestion(live)) {
+          setMicError("That sounded incomplete. Press Listen until they finish the question.");
+          return;
+        }
+
         if (live.split(/\s+/).filter(Boolean).length >= 6) {
           const updated = transcriptRef.current ? `${transcriptRef.current} ${live}` : live;
           transcriptRef.current = updated;
@@ -1661,6 +1671,10 @@ function PiPContent({
           const finalText = result.transcript?.trim() ?? "";
 
           if (finalText) {
+            if (isIncompleteQuestion(finalText)) {
+              setMicError("That sounded incomplete. Press Listen until they finish the question.");
+              return;
+            }
             const updated = transcriptRef.current ? `${transcriptRef.current} ${finalText}` : finalText;
             transcriptRef.current = updated;
             setChunks((prev) => [...prev, {
@@ -1738,8 +1752,8 @@ function PiPContent({
     setMicError(null);
     const normalizedTitle = sessionTitle.trim() || (chosenMode === "interview" ? "Interview Session" : "Meeting Session");
     const modeGuidance = chosenMode === "interview"
-      ? "Live interview mode: prioritize resume-grounded candidate answers, STAR where applicable, and concise confident delivery."
-      : "Live meeting mode: prioritize action-ready responses, decisions, and follow-up clarity.";
+      ? "Live interview: think about THIS question and answer it. Resume facts only when they asked about the person. Never open with job title."
+      : "Live meeting: short, decisive answers to THIS ask, not a repeated bio.";
 
     try {
       const session = await createSession.mutateAsync({ data: { title: normalizedTitle, platform } });
@@ -1758,16 +1772,11 @@ function PiPContent({
       setElapsed("0:00:00");
       setSessionActive(true);
       queryClient.invalidateQueries({ queryKey: getListSessionsQueryKey() });
-
-      // Enter live assist mode immediately after session start.
-      startMicRecording().catch(() => {
-        setMicError("Could not start microphone automatically. Tap the mic button to start live capture.");
-      });
     } catch (error) {
       setMicError(error instanceof Error ? error.message : "Could not start the session. Please try again.");
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sessionTitle, platform, sessionGuidance, sessionMode, createSession, queryClient, startMicRecording]);
+  }, [sessionTitle, platform, sessionGuidance, sessionMode, createSession, queryClient]);
 
   const stopSession = useCallback(() => {
     releaseMicStream();
@@ -1953,7 +1962,7 @@ function PiPContent({
                 </div>
                 <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-4 text-xs text-white/55 space-y-2">
                   <p className="font-semibold text-white text-xs">How it works</p>
-                  <p>🎙 Tap the mic — transcript appears <strong>live</strong> while the client speaks.</p>
+                  <p>🎙 Tap the mic — transcript appears <strong>live</strong> while the client speaks. Capture does not start until you press Listen.</p>
                   <p>⏹ Tap to stop — AI answer appears <strong>immediately</strong>.</p>
                   <p>👁 <strong>Transparent</strong> pops Hikanest into a floating overlay window.</p>
                 </div>
