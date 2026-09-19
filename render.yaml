@@ -14,7 +14,7 @@ services:
       - key: OPENAI_MODEL
         value: gpt-5.6-sol
       - key: OPENAI_ALLOWED_MODELS
-        value: gpt-5.6-sol,gpt-4.1,gpt-4o
+        value: gpt-5.6-sol
       - key: OPENAI_API_KEY
         sync: false
       - key: CORS_ALLOWED_ORIGINS

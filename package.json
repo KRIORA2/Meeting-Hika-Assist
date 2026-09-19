@@ -13,7 +13,9 @@
     "verify:realtime": "node scripts/verify-realtime-security.mjs",
     "typecheck": "pnpm run typecheck:libs && pnpm -r --filter \"./artifacts/**\" --filter \"./scripts\" --if-present run typecheck",
     "verify:answers": "pnpm --filter @workspace/scripts exec tsx src/verify-answer-quality.ts && pnpm --filter @workspace/scripts exec tsx src/verify-interview-intelligence.ts",
-    "verify:live-answers": "pnpm --filter @workspace/scripts exec tsx src/eval-live-answers.ts"
+    "verify:live-answers": "pnpm --filter @workspace/scripts exec tsx src/eval-live-answers.ts",
+    "verify:interview-rework": "pnpm --filter @workspace/scripts exec tsx src/verify-interview-intelligence.ts && pnpm --filter @workspace/scripts exec tsx src/verify-interview-rework.ts",
+    "verify:production-api": "pnpm --filter @workspace/scripts exec tsx src/verify-production-api.ts"
   },
   "private": true,
   "devDependencies": {

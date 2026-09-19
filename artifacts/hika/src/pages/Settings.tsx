@@ -47,8 +47,7 @@ export default function Settings() {
   const [model, setModel] = useState(() => {
     if (typeof window === "undefined") return "gpt-5.6-sol";
     const stored = window.localStorage.getItem("hika-ai-model");
-    if (!stored || stored === "gpt-4o") return "gpt-5.6-sol";
-    return stored;
+    return stored === "gpt-5.6-sol" ? stored : "gpt-5.6-sol";
   });
   const [desktopStatus, setDesktopStatus] = useState("");
 
@@ -118,8 +117,6 @@ export default function Settings() {
                 value={model}
                 options={[
                   { label: "GPT-5.6 Sol (current answers)", value: "gpt-5.6-sol" },
-                  { label: "GPT-4.1", value: "gpt-4.1" },
-                  { label: "GPT-4o", value: "gpt-4o" },
                 ]}
                 onChange={setModel}
               />

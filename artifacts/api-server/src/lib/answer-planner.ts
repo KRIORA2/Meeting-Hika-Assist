@@ -443,8 +443,8 @@ export function planToPrompt(plan: AnswerPlan, analysis: QuestionAnalysis): stri
     `Relation: ${analysis.relationToPreviousQuestion}${analysis.isFollowUp ? " (follow-up — do not restart)" : ""}`,
     `Objective: ${plan.objective}`,
     `Structure: ${plan.structure}`,
-    `Must cover: ${plan.mustCover.join("; ")}`,
-    `Avoid: ${plan.avoid.join("; ")}`,
+    `Must cover if relevant: ${plan.mustCover.join("; ")}`,
+    `Avoid repeating: ${plan.avoid.join("; ")}`,
     plan.candidateFactsSafe.length && analysis.intent === "experience"
       ? `Safe resume facts for this experience question: ${plan.candidateFactsSafe.join("; ")}`
       : analysis.intent === "experience"
@@ -455,6 +455,6 @@ export function planToPrompt(plan: AnswerPlan, analysis: QuestionAnalysis): stri
     analysis.coding
       ? `CODING spec: language=${analysis.coding.language} dialect=${analysis.coding.dialect || "generic"} task=${analysis.coding.codingTask} op=${analysis.coding.codingOperation} key=${analysis.coding.businessKey || "unspecified"}`
       : "",
-    "Do not pad with security, cost, CI/CD, or monitoring unless this question needs them.",
+    "These are planning hints, not a script. Reason about THIS question. Do not paste a canned paragraph. Do not pad with security, cost, CI/CD, or monitoring unless this question needs them.",
   ].filter(Boolean).join("\n");
 }

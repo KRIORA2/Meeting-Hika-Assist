@@ -28,7 +28,7 @@ const PROCESS_NOT_CODE = /(handle this situation|provide access|grant access|onb
 const THEORY_STEM = /^(what is|what are|what's|explain|define |how does .{0,80} work)\b/i;
 const HOW_YOU = /^(how (do|would|can) (you|we)\b)/i;
 const IMPERATIVE = /^(can you |could you |please |now |okay,? )?(write|show|give|paste|provide)\b/i;
-const CODE_NOUN = /\b(code|sql|query|script|snippet|pyspark|python|merge)\b/i;
+const CODE_NOUN = /\b(code|sql|query|script|snippet|pyspark|python|merge|scd|scd1|scd2|window)\b/i;
 const EXPLICIT_CODE = /sample code|executable code|\bsql for\b|sql query|pyspark code|python code|write a (merge|cte|query|select)|write the (merge|query|code)|show me (the |a )?(sql|code|query|merge)|give me the code/i;
 const PROBLEM_PROMPT = /^(find|remove|dedupe|deduplicate|keep|return|select) (the )?(duplicate|latest|second highest|nth |top n)/i;
 const CONVERT = /(convert .{0,40} to (sql|pyspark|python)|do (it|that|the same) in (sql|pyspark|python|spark)|make it (sql|pyspark|python))/i;
@@ -43,6 +43,7 @@ export function isCodingQuestion(text: string, previousIntent?: string): boolean
   if (HOW_YOU.test(t) && !EXPLICIT_CODE.test(t) && !CONVERT.test(t)) return false;
   if (EXPLICIT_CODE.test(t) || PROBLEM_PROMPT.test(t) || CONVERT.test(t)) return true;
   if (IMPERATIVE.test(t) && CODE_NOUN.test(t)) return true;
+  if (/\b(write|show|give)\b.{0,40}\b(scd|scd1|scd2|pyspark|sql|python)\b/i.test(t)) return true;
   if (previousIntent === "coding" && CODING_FOLLOW.test(t)) return true;
   return false;
 }

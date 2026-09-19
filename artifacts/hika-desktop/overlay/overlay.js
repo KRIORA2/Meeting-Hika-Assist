@@ -67,8 +67,6 @@ const realtimeMetrics = {};
 let realtimeDiagnostics = false;
 let selectedSessionMode = "interview";
 let selectedModel = "gpt-5.6-sol";
-let hostedApiSupportsGpt5 = null;
-let hostedApiProbe = null;
 let autoAnswerEnabled = true;
 let saveTranscriptEnabled = true;
 let remainingCredits = null;
@@ -93,6 +91,9 @@ let liveSpeechFinal = "";
 let liveSpeechActive = false;
 let listenState = "idle";
 let pendingSttCount = 0;
+let analyzeAbort = null;
+let activeQuestionId = "";
+let activeGenerationId = "";
 
 function markRealtimeMetric(name) {
   const now = performance.now();
@@ -197,7 +198,6 @@ async function init() {
   if (window.hikaElectron) {
     apiUrl = await window.hikaElectron.getApiUrl();
     webAppUrl = await window.hikaElectron.getWebAppUrl();
-    void detectHostedAnswerApi();
     realtimeDiagnostics = await window.hikaElectron.isDevelopment();
     window.hikaElectron.pin();
     const installedVersion = await window.hikaElectron.getAppVersion();
@@ -619,7 +619,8 @@ const ENGLISH_QUESTION = /\b(what|why|how|when|where|who|which|tell|explain|desc
 const ENGLISH_FUNCTION_WORDS = new Set(["the","a","an","is","are","was","were","you","i","we","they","to","of","and","in","that","it","for","on","with","this","have","be","what","how","why","can","do","does","tell","me","about","your","my","so","yeah","okay","ok","like","just","when","if","or","not","but","from","at","as","would","could","should","will","there","here","please","yes","no","right","well","hello","hi","hey","explain"]);
 const WEAK_ENGLISH_WORDS = new Set(["a","an","i","no","ok","to","or"]);
 const FOREIGN_FUNCTION_WORDS = new Set(["alsof","hemel","het","een","van","niet","jij","jullie","und","der","die","das","ich","nicht","que","para","como","esto","esta","les","des","une","pas","avec","oui","el","los","las","por","una","ist","che","per","con","kya","hai","aap","kaise","nahi","nahin","haan","theek","acha","accha","bhai","kyun","kyon","mera","meri","tum","hum","kaun","kab","kahan","woh","yeh","aur","itu","bagus","sekali","saya","tidak","yang","untuk","ada","ini","hallo","wie","geht","dir","nuk","kuptoj","tardo","diario","kocham","bueno","gracias","hola","porque","pero","muy","aqui","ahora"]);
-const SHORT_TECH_ASK = /\b(delta|databricks|adf|fabric|snowflake|spark|pyspark|kafka|unity catalog|direct lake|scd(?:\s*type)?|cdc|watermark|power bi|synapse|dlt|lakehouse|parquet|unity)\b/i;
+const SHORT_TECH_ASK = /\b(delta|databricks|adf|fabric|snowflake|spark|pyspark|kafka|unity catalog|direct lake|scd(?:\s*type)?|cdc|watermark|power bi|synapse|dlt|lakehouse|parquet|unity|sql|python|pipeline|schema|duplicate|incremental|merge)\b/i;
+const CODING_SHORTHAND = /\b(write|show|give|paste|implement)\b.{0,48}\b(code|sql|query|script|pyspark|python|scd|merge|window)\b/i;
 
 function looksLikeUsEnglish(text) {
   const value = String(text || "").replace(/\s+/g, " ").trim();
@@ -627,6 +628,8 @@ function looksLikeUsEnglish(text) {
   if (/[\u0900-\u097F\u0980-\u09FF\u0A00-\u0A7F\u0A80-\u0AFF\u0B00-\u0B7F\u0C00-\u0C7F\u0C80-\u0CFF\u0D00-\u0D7F]/.test(value)) return false;
   if (HALLUCINATED_TRANSCRIPT.test(value)) return false;
   const words = value.toLowerCase().replace(/[^a-z'\s]/g, " ").split(/\s+/).filter(Boolean);
+  if (SHORT_TECH_ASK.test(value) && words.length >= 2) return true;
+  if (CODING_SHORTHAND.test(value)) return true;
   const shortTech = words.length <= 6 && SHORT_TECH_ASK.test(value) && (
     ENGLISH_QUESTION.test(value) || /[?]/.test(value) || /\bvs\.?\b|versus/i.test(value)
   );
@@ -636,7 +639,7 @@ function looksLikeUsEnglish(text) {
   const strongEnglish = words.filter((word) => ENGLISH_FUNCTION_WORDS.has(word) && !WEAK_ENGLISH_WORDS.has(word)).length;
   const foreignHits = words.filter((word) => FOREIGN_FUNCTION_WORDS.has(word)).length;
   if (foreignHits > 0 && foreignHits >= strongEnglish) return false;
-  if (words.length < 5 && !ENGLISH_QUESTION.test(value)) return false;
+  if (words.length < 5 && !ENGLISH_QUESTION.test(value) && !/\b(write|implement|optimize|handle|suppose|pipeline|schema|duplicate)\b/i.test(value)) return false;
   if (strongEnglish === 0 && words.length < 6) return false;
   if (englishHits === 0) return false;
   return true;
@@ -650,31 +653,22 @@ function isReadyQuestion(text) {
 function isIncompleteQuestion(text) {
   const value = String(text || "").replace(/\s+/g, " ").trim();
   if (!value) return true;
-  if (/^(how would you|how do you|how can you|what about|can you|could you|walk me through|so how|and then|what if|suppose)(\s+(handle|do|implement|process|deal with|make|use|choose))?(\s+a)?\s*[.?,]*$/i.test(value)) {
+  if (/^(how would you|how do you|how can you|what about|what would you|can you|could you|walk me through|so how|and then|what if|suppose|tell me|explain)(\s+(handle|do|implement|process|deal with|make|use|choose|explain|about))?(\s+a)?\s*[.?,]*$/i.test(value)) {
     return true;
   }
-  // Keep in sync with artifacts/api-server/src/lib/question-finalizer.ts
-  if (/\b(how would you|how do you|how can you)\s*$/i.test(value)) return true;
+  if (/\b(how would you|how do you|how can you|what would you|can you explain|could you explain|walk me through)\s*$/i.test(value)) return true;
   if (/\.{2,}$|…$/.test(value)) return true;
   if (/\b(the|a|an|to|for|with|of|and|or|if)\s*[.?,]*$/i.test(value)) return true;
-  const words = value.split(/\s+/);
+  const words = value.split(/\s+/).filter(Boolean);
+  if (words.length <= 2 && !SHORT_TECH_ASK.test(value) && !/[?]/.test(value)) return true;
   if (words.length <= 3 && /^(how|what|why|can|could|walk)\b/i.test(value) && !/[?]/.test(value) && !SHORT_TECH_ASK.test(value)) return true;
-  if (
-    words.length < 7
-    && /^(how|what|why|can you)\b/i.test(value)
-    && !/[?]/.test(value)
-    && !SHORT_TECH_ASK.test(value)
-    && !/\b(fail|merge|load|skew|join|lake|factory|spark|sql|cdc|watermark|delta|adf|pipeline|fabric|snowflake|kafka)\b/i.test(value)
-  ) {
-    return true;
-  }
   return false;
 }
 
 function isHallucinatedTranscript(text) {
   const value = String(text || "").replace(/\s+/g, " ").trim();
-  if (!value) return true;
-  return !looksLikeUsEnglish(value);
+  if (!value) return false;
+  return HALLUCINATED_TRANSCRIPT.test(value);
 }
 
 function isMeetingCapture() {
@@ -2221,30 +2215,12 @@ async function transcribeBlob(blob, { preview = false } = {}) {
 }
 
 // ── AI Analysis ───────────────────────────────────────────────────────────────
-function detectHostedAnswerApi() {
-  if (!hostedApiProbe) {
-    hostedApiProbe = (async () => {
-      try {
-        const res = await fetch(apiUrl + "/api/billing/plans");
-        hostedApiSupportsGpt5 = res.ok;
-      } catch {
-        hostedApiSupportsGpt5 = false;
-      }
-      return hostedApiSupportsGpt5;
-    })();
-  }
-  return hostedApiProbe;
-}
-
 function resolveAnalyzeModel() {
-  const model = selectedModel || "gpt-5.6-sol";
-  if (/^gpt-5/i.test(model) && hostedApiSupportsGpt5 === false) return "gpt-4.1";
-  return model;
+  return "gpt-5.6-sol";
 }
 
 async function analyze(utterance, { typed = false } = {}) {
-  if (!utterance || isAnalyzing || sessionEnding || !sessionId) return false;
-  await detectHostedAnswerApi();
+  if (!utterance || sessionEnding || !sessionId) return false;
   if (!typed && isHallucinatedTranscript(utterance)) {
     showToast("I caught speech, but it didn't sound like a clear English question.", "warn");
     return false;
@@ -2254,10 +2230,21 @@ async function analyze(utterance, { typed = false } = {}) {
     return false;
   }
   const epoch = sessionEpoch;
+  const stamp = Date.now().toString(36);
+  const rand = () => Math.random().toString(36).slice(2, 8);
+  const questionId = `q_${stamp}_${rand()}`;
+  const generationId = `g_${stamp}_${rand()}`;
+  if (analyzeAbort) {
+    try { analyzeAbort.abort(); } catch { /* ignore */ }
+  }
+  analyzeAbort = typeof AbortController === "function" ? new AbortController() : null;
+  const myAbort = analyzeAbort;
+  activeQuestionId = questionId;
+  activeGenerationId = generationId;
   isAnalyzing = true;
   setAnalyzing(true);
 
-  const codeRequest = /\b(write|show me|give me|paste)\b.{0,40}\b(code|sql|query|script|pyspark|python)\b|\b(executable code|sql query to|pyspark code|python script|write a pyspark)\b/i.test(utterance)
+  const codeRequest = /\b(write|show me|give me|paste)\b.{0,40}\b(code|sql|query|script|pyspark|python|scd)\b|\b(executable code|sql query to|pyspark code|python script|write a pyspark)\b/i.test(utterance)
     && !/\b(what do you mean|what is|what are|explain|define)\b/i.test(utterance);
   const context = [
     `ANSWER THIS: "${utterance.replace(/"/g, "'")}"`,
@@ -2266,13 +2253,15 @@ async function analyze(utterance, { typed = false } = {}) {
       ? "Use the resume for facts about this person. For technical questions, think and answer THIS ask — do not repeat a job-title intro."
       : "Think about THIS question and answer it. Do not reuse the previous opener.",
     codeRequest
-      ? "They asked for a query or script. Employee explanation first, then complete production code. Use abfss example paths, never s3://my-bucket."
+      ? "They asked for a query or script. Code first, then a short spoken explanation. Use abfss example paths, never s3://my-bucket."
       : "",
     `Timestamp: ${new Date().toISOString()}`,
   ].filter(Boolean).join("\n");
   const body = {
     transcript: context,
     sessionId,
+    questionId,
+    generationId,
     uploadedDocs: uploadedDocs.slice(0, 3).map((doc) => ({ id: doc.id, name: doc.name })),
     model: resolveAnalyzeModel(),
     mode: selectedSessionMode === "call" ? "meeting" : "interview",
@@ -2283,19 +2272,29 @@ async function analyze(utterance, { typed = false } = {}) {
     ]),
   };
 
+  const belongsToActive = (event) => {
+    if (!event) return activeGenerationId === generationId;
+    if (event.generationId && event.generationId !== generationId) return false;
+    if (event.questionId && event.questionId !== questionId) return false;
+    return activeGenerationId === generationId;
+  };
+
   const paintInsight = (insight, done = false) => {
+    if (!belongsToActive(insight)) return;
     const next = {
+      questionId,
+      generationId,
       question: insight.question || utterance,
       answer: insight.answer || "",
-      confidence: insight.confidence || (done ? "medium" : "medium"),
+      confidence: insight.confidence || "medium",
       suggestions: insight.suggestions || [],
       sections: insight.sections || [],
       keyPoints: insight.keyPoints || [],
-      timestamp: insights[0]?.partial ? insights[0].timestamp : new Date(),
+      timestamp: insights[0]?.partial && insights[0]?.generationId === generationId ? insights[0].timestamp : new Date(),
       partial: !done,
     };
-    if (insights[0]?.partial) insights[0] = next;
-    else insights = [next, ...insights].slice(0, 20);
+    if (insights[0]?.partial && insights[0]?.generationId === generationId) insights[0] = next;
+    else insights = [next, ...insights.filter((item) => item.generationId !== generationId)].slice(0, 20);
     selectedHistoryInsight = null;
     renderInsights();
   };
@@ -2303,6 +2302,8 @@ async function analyze(utterance, { typed = false } = {}) {
   const requestStartedAt = Date.now();
   const payloadBytes = new TextEncoder().encode(JSON.stringify(body)).length;
   console.info("Analyze request sizes", {
+    questionId,
+    generationId,
     questionLength: String(utterance || "").length,
     transcriptLength: String(body.transcript || "").length,
     historyLength: Array.isArray(body.history) ? body.history.length : 0,
@@ -2313,12 +2314,16 @@ async function analyze(utterance, { typed = false } = {}) {
   try {
     const result = await analyzeStreaming(body, (partial) => {
       if (sessionEnding || !sessionId || epoch !== sessionEpoch) return;
+      if (!belongsToActive(partial)) return;
       paintInsight(partial, false);
-    });
+    }, myAbort?.signal);
     if (!result) return false;
     if (sessionEnding || !sessionId || epoch !== sessionEpoch) return false;
+    if (!belongsToActive(result)) return false;
 
     const insight = {
+      questionId,
+      generationId,
       question:    result.question || utterance,
       answer:      result.answer   || "",
       confidence:  result.confidence || "medium",
@@ -2337,6 +2342,8 @@ async function analyze(utterance, { typed = false } = {}) {
     else void refreshCredits();
     return true;
   } catch (err) {
+    if (err?.name === "AbortError" || /aborted/i.test(String(err?.message || ""))) return false;
+    if (!belongsToActive()) return false;
     const elapsedMs = Date.now() - requestStartedAt;
     const status = Number(err?.status) || 0;
     const code = String(err?.code || err?.analyzeType || "");
@@ -2345,6 +2352,8 @@ async function analyze(utterance, { typed = false } = {}) {
       status,
       code,
       elapsedMs,
+      questionId,
+      generationId,
       requestId: err?.requestId || "",
       openAiStarted: Boolean(err?.openAiStarted),
       firstTokenArrived: Boolean(err?.firstTokenArrived),
@@ -2367,15 +2376,18 @@ async function analyze(utterance, { typed = false } = {}) {
     }
     return false;
   } finally {
-    isAnalyzing = false;
-    setAnalyzing(false);
+    if (activeGenerationId === generationId) {
+      isAnalyzing = false;
+      setAnalyzing(false);
+    }
   }
 }
 
-async function analyzeStreaming(body, onDelta) {
+async function analyzeStreaming(body, onDelta, signal) {
   const opts = { method: "POST", headers: new Headers({ "Content-Type": "application/json", Accept: "application/x-ndjson" }) };
   if (authToken) opts.headers.set("Authorization", `Bearer ${authToken}`);
   opts.body = JSON.stringify(body);
+  if (signal) opts.signal = signal;
   const res = await fetch(apiUrl + "/api/openai/analyze", opts);
   if (!res.ok) {
     const payload = await res.json().catch(() => null);

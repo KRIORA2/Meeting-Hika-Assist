@@ -6,5 +6,5 @@
     "types": ["node"]
   },
   "include": ["src"],
-  "exclude": ["src/verify-answer-quality.ts", "src/verify-interview-intelligence.ts", "src/eval-live-answers.ts", "src/smoke-gpt56-sol.ts", "src/probe-gpt56-sol.ts", "src/verify-live-answers.ts"]
+  "exclude": ["src/verify-answer-quality.ts", "src/verify-interview-intelligence.ts", "src/eval-live-answers.ts", "src/smoke-gpt56-sol.ts", "src/probe-gpt56-sol.ts", "src/verify-live-answers.ts", "src/verify-interview-rework.ts", "src/verify-production-api.ts"]
 }

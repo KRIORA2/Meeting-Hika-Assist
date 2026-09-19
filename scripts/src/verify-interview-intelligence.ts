@@ -11,6 +11,9 @@ import { analyzeWithMemory, getInterviewThread, recallSessionMemory, rememberAns
 import { rewriteUngroundedExperience } from "../../artifacts/api-server/src/lib/candidate-grounding.ts";
 import type { PersonaCard } from "../../artifacts/api-server/src/lib/persona.ts";
 import { FROZEN_INTERVIEW_PACK } from "../../artifacts/api-server/src/lib/interview-voice.ts";
+import { isIncompleteQuestion, normalizeInterviewEnglish, newQuestionIdentity } from "../../artifacts/api-server/src/lib/question-finalizer.ts";
+import { isCodingQuestion } from "../../artifacts/api-server/src/lib/coding-intelligence.ts";
+import { looksLikeUsEnglish as englishOk } from "../../artifacts/api-server/src/lib/answer-quality.ts";
 
 const incremental = [
   { q: "What is incremental loading?", intent: "definition" },
@@ -448,6 +451,60 @@ assert.equal(analyzeQuestion("Why is my Databricks job slow?").intent, "troubles
 const adfLongClaim = rewriteUngroundedExperience("In my current project we use Azure Data Factory for orchestration.", resumeAdf);
 assert.match(adfLongClaim.text, /Azure Data Factory/i);
 assert.equal(adfLongClaim.stripped.length, 0);
+
+const imperfect = [
+  { q: "what is cdc actually", intent: "definition", topic: "incremental" },
+  { q: "CDC what is?", intent: "definition", topic: "incremental" },
+  { q: "CDC means what?", intent: "definition", topic: "incremental" },
+  { q: "Could you tell me what CDC means?", intent: "definition", topic: "incremental" },
+  { q: "Explain change data capture.", intent: "definition", topic: "incremental" },
+  { q: "how you implement incremental load", intent: "how_to_implement", topic: "incremental" },
+  { q: "write pyspark remove duplicate", intent: "coding" },
+  { q: "if pipeline fail halfway what happen", intent: "failure_handling" },
+  { q: "tell difference adf and databricks", intent: "comparison" },
+  { q: "how optimize slow spark job", intent: "optimization" },
+  { q: "what if source schema changed", intent: "how_to_handle" },
+  { q: "why delta lake", intent: "why", topic: "delta" },
+  { q: "you have duplicate records how handle", intent: "how_to_handle" },
+  { q: "write sql second highest salary", intent: "coding" },
+  { q: "can you write SCD2", intent: "coding" },
+];
+for (const row of imperfect) {
+  const analysis = analyzeQuestion(row.q);
+  assert.equal(analysis.isIncomplete, false, `${row.q} should be complete`);
+  assert.equal(analysis.isAnswerable, true, `${row.q} should be answerable`);
+  assert.equal(analysis.intent, row.intent, `${row.q} intent=${analysis.intent} expected ${row.intent}`);
+  if (row.topic) assert.equal(analysis.topic, row.topic, `${row.q} topic=${analysis.topic}`);
+  assert.equal(englishOk(row.q), true, `${row.q} should pass English gate`);
+}
+assert.equal(analyzeQuestion("Can you explain...").isIncomplete, true);
+assert.equal(analyzeQuestion("Can you explain incremental...").isIncomplete, true);
+assert.equal(isIncompleteQuestion("How would you"), true);
+assert.equal(isCodingQuestion("write pyspark remove duplicate"), true);
+assert.equal(isCodingQuestion("write sql second highest salary"), true);
+assert.equal(isCodingQuestion("can you write SCD2"), true);
+assert.match(normalizeInterviewEnglish("how you implement incremental load"), /how do you implement/i);
+assert.match(normalizeInterviewEnglish("CDC what is?"), /what is cdc/i);
+
+const cdc = analyzeQuestion("What is CDC?");
+const cdcImpl = analyzeQuestion("How do you implement it in Databricks?", cdc);
+assert.equal(cdcImpl.isFollowUp, true);
+assert.equal(cdcImpl.topic, "databricks");
+const cdcScale = analyzeQuestion("What if the source generates millions of changes?", cdcImpl);
+assert.equal(cdcScale.isFollowUp, true);
+const cdcOpt = analyzeQuestion("How would you optimize that?", cdcScale);
+assert.equal(cdcOpt.isFollowUp, true);
+assert.equal(cdcOpt.intent, "optimization");
+
+const firstId = newQuestionIdentity("A");
+const secondId = newQuestionIdentity("B");
+assert.notEqual(firstId.questionId, secondId.questionId);
+assert.notEqual(firstId.generationId, secondId.generationId);
+function rejectStale(activeGenerationId: string, eventGenerationId: string) {
+  return eventGenerationId === activeGenerationId;
+}
+assert.equal(rejectStale("g_new", "g_old"), false);
+assert.equal(rejectStale("g_new", "g_new"), true);
 
 const evalRows = [...incremental, ...extra];
 const followUpAccuracy = (followHits + convoFollowHits + 5) / (followTotal + convoFollowHits + 5);

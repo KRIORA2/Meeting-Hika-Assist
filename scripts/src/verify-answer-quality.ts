@@ -72,6 +72,9 @@ assert.equal(matchFrozenAnswer("How do you tune Spark SQL performance?")?.id, "s
 assert.equal(matchFrozenAnswer("How would you map this Azure data platform onto AWS?")?.id, "aws-map");
 assert.equal(matchFrozenAnswer("What is the difference between Docker and Kubernetes?")?.id, "k8s-vs-docker");
 assert.equal(matchFrozenAnswer("What is RAG and how would you ground an assistant on internal docs?")?.id, "what-is-rag");
+assert.equal(looksLikeUsEnglish("write pyspark remove duplicate"), true);
+assert.equal(looksLikeUsEnglish("how you remove duplicate in spark"), true);
+assert.equal(looksLikeUsEnglish("what is cdc actually"), true);
 assert.equal(looksLikeUsEnglish("Could you please explain about data skew?"), true);
 assert.equal(looksLikeUsEnglish("Why Delta?"), true);
 assert.equal(looksLikeUsEnglish("Direct Lake?"), true);
@@ -218,7 +221,6 @@ assert.equal(
   false,
   "Spoken why answers may say 'X is a great choice'",
 );
-
 const stats = knowledgeStats();
 assert.ok(stats.topics >= 30, "Topic pack should store 30+ processed subjects");
 assert.ok(stats.sources >= 20, "Topic pack should keep provenance from official sources");
@@ -231,5 +233,24 @@ assert.doesNotMatch(autoLoaderCtx, /Pinecone|OWASP Top 10|GraphQL/i);
 const adfCtx = subjectContext("What is Azure Data Factory?");
 assert.match(adfCtx, /orchestr/i);
 assert.ok(adfCtx.length < 2400, `ADF context should stay small, got ${adfCtx.length}`);
+
+import { canonicalizeAnswerModel, resolveAnswerModel } from "../../artifacts/api-server/src/lib/answer-chat.ts";
+assert.equal(canonicalizeAnswerModel("5.6-sol"), "gpt-5.6-sol");
+assert.equal(canonicalizeAnswerModel("gpt-5.6-sol"), "gpt-5.6-sol");
+const previousModel = process.env.OPENAI_MODEL;
+const previousAllowed = process.env.OPENAI_ALLOWED_MODELS;
+process.env.OPENAI_MODEL = "5.6-sol";
+process.env.OPENAI_ALLOWED_MODELS = "gpt-4.1,gpt-4o";
+assert.equal(resolveAnswerModel("gpt-4.1"), "gpt-5.6-sol");
+assert.equal(resolveAnswerModel("gpt-4o"), "gpt-5.6-sol");
+assert.equal(resolveAnswerModel("gpt-5.6-sol"), "gpt-5.6-sol");
+process.env.OPENAI_MODEL = "gpt-4.1";
+assert.equal(resolveAnswerModel("gpt-4.1"), "gpt-5.6-sol");
+process.env.OPENAI_MODEL = "gpt-5.6-sol";
+assert.equal(resolveAnswerModel(), "gpt-5.6-sol");
+if (previousModel === undefined) delete process.env.OPENAI_MODEL;
+else process.env.OPENAI_MODEL = previousModel;
+if (previousAllowed === undefined) delete process.env.OPENAI_ALLOWED_MODELS;
+else process.env.OPENAI_ALLOWED_MODELS = previousAllowed;
 
 console.log(`Golden interview pack passed (${pack.length} questions, ${stats.topics} topics, ${stats.sources} sources).`);

@@ -8,7 +8,6 @@ import {
   extractKeyPoints,
   isCodeIntent,
   isPointwiseQuestion,
-  isProcessQuestion,
   looksLikeCodeDump,
   scoreEmployeeAnswer,
   stripCodeFences,
@@ -18,7 +17,7 @@ import { defaultCodingSpec, formatCodingAnswer, hasExecutableCode } from "./codi
 import type { PersonaCard } from "./persona";
 import type { QuestionAnalysis } from "./question-analyzer";
 import { answerFormatCue } from "./interview-voice";
-import { normalizeSpokenQuestion } from "./question-finalizer";
+import { newQuestionIdentity, unwrapAnswerThis } from "./question-finalizer";
 import { ANSWER_API_METHOD, annotateOpenAiError, buildAnswerChatParams, resolveAnswerModel } from "./answer-chat";
 
 export type InterviewUserPart =
@@ -33,6 +32,8 @@ export type InterviewAnswerSection = {
 };
 
 export type InterviewAnswerEval = {
+  questionId: string;
+  generationId: string;
   question: string;
   normalizedQuestion: string;
   analysis: QuestionAnalysis;
@@ -59,18 +60,7 @@ export type InterviewAnswerEval = {
   skippedLlm: boolean;
 };
 
-const JOIN_FALLBACK = "These are how I keep or drop rows when two tables meet.\n• Inner join keeps only matching keys.\n• Left join keeps every row from the driving table and fills nulls when the right side has no match.\n• Right join is the opposite.\nFor example I almost always left join employees to departments so I never drop someone who is not assigned yet.";
-const LAKEVIEW_FALLBACK = "I'd confirm which they mean, because two things get called lake view.\n• Databricks Lakeview is the dashboarding and AI/BI layer, not a table. For example analysts build those dashboards on Gold or a SQL warehouse.\n• A lakehouse view is a SQL view over Delta so people query a stable name without touching raw files.";
-const TRANSFORM_FALLBACK = "I don't think of load as a list of PySpark functions. In a typical Azure load I use bronze landing, then a notebook to type the columns we need.\n• Filter and select so bronze junk never reaches silver.\n• withColumn for derived fields and standard names.\n• Join reference data, and groupBy only when gold needs an aggregate.\n• Write Delta, and the next job reads that, not the raw files.";
-const ACCESS_FALLBACK = "I don't grant people one by one. I put them in an Azure AD group and grant the group on Unity Catalog. ADF service principals get the same pattern. Then I validate they can open the schema, not the whole lake.";
-
-function spokenFallbackFor(question: string): string {
-  const t = String(question || "").toLowerCase();
-  if (/left join|right join|inner join|what do you mean by .{0,40}join/.test(t)) return JOIN_FALLBACK;
-  if (/lake ?view/.test(t)) return LAKEVIEW_FALLBACK;
-  if (/transformation/.test(t) && /load|used/.test(t)) return TRANSFORM_FALLBACK;
-  return "";
-}
+const EMPTY_MODEL_ANSWER = "The model did not return an answer for this question. Please ask it again.";
 
 function extractJsonStringField(raw: string, field: string) {
   const key = `"${field}"`;
@@ -147,6 +137,8 @@ function emptyPlan(analysis: QuestionAnalysis): AnswerPlan {
 }
 
 function emptyEval(args: {
+  questionId?: string;
+  generationId?: string;
   question: string;
   analysis: QuestionAnalysis;
   finalizeMs: number;
@@ -156,6 +148,8 @@ function emptyEval(args: {
 }): InterviewAnswerEval {
   const plan = emptyPlan(args.analysis);
   return {
+    questionId: args.questionId || "",
+    generationId: args.generationId || "",
     question: args.question,
     normalizedQuestion: args.analysis.question,
     analysis: args.analysis,
@@ -197,11 +191,17 @@ export async function generateInterviewAnswer(args: {
   live?: boolean;
   persist?: boolean;
   extraUserParts?: InterviewUserPart[];
-  onDelta?: (partial: string) => void;
+  questionId?: string;
+  generationId?: string;
+  onDelta?: (partial: string, meta?: { questionId: string; generationId: string }) => void;
 }): Promise<InterviewAnswerEval> {
   const started = Date.now();
+  const identity = newQuestionIdentity(args.question);
+  const questionId = args.questionId || identity.questionId;
+  const generationId = args.generationId || identity.generationId;
+  const emit = (partial: string) => args.onDelta?.(partial, { questionId, generationId });
   const finalizeAt = Date.now();
-  const question = normalizeSpokenQuestion(args.question);
+  const question = unwrapAnswerThis(args.question);
   const finalizeMs = Date.now() - finalizeAt;
   const classifiedAt = Date.now();
   const analysis = analyzeWithMemory(args.userId, question, args.sessionId);
@@ -210,7 +210,7 @@ export async function generateInterviewAnswer(args: {
   const live = Boolean(liveRequested && process.env.OPENAI_API_KEY);
 
   if (!analysis.isAnswerable || analysis.isIncomplete) {
-    return emptyEval({ question, analysis, finalizeMs, classifyMs, started, live: false });
+    return emptyEval({ questionId, generationId, question, analysis, finalizeMs, classifyMs, started, live: false });
   }
 
   const retrievalAt = Date.now();
@@ -245,7 +245,19 @@ export async function generateInterviewAnswer(args: {
   if (live) {
     const { openai } = await import("@workspace/integrations-openai-ai-server");
     const userContent: InterviewUserPart[] = [
-      { type: "text", text: `THIS QUESTION ONLY:\n${question}` },
+      {
+        type: "text",
+        text: [
+          `ORIGINAL TRANSCRIPT:\n${analysis.originalQuestion || question}`,
+          `INTENDED QUESTION:\n${analysis.question || question}`,
+          analysis.intent ? `INTERNAL INTENT: ${analysis.intent}${analysis.primaryIntent && analysis.primaryIntent !== analysis.intent ? `/${analysis.primaryIntent}` : ""}` : "",
+          analysis.technologies.length ? `TECHNOLOGY: ${analysis.technologies.join(", ")}` : "",
+          analysis.isCodingQuestion && analysis.coding
+            ? `CODING REQUIRED: language=${analysis.coding.language} op=${analysis.coding.codingOperation}. Return actual code.`
+            : "",
+          "Answer the intended technical interview question. Do not answer the transcript literally if English is imperfect. Do not invent a different question.",
+        ].filter(Boolean).join("\n\n"),
+      },
       ...(args.extraUserParts || []),
     ];
     const openAiStartedAt = Date.now();
@@ -270,7 +282,7 @@ export async function generateInterviewAnswer(args: {
         const partial = extractJsonStringField(raw, "answer");
         if (partial.length >= 8 && partial !== lastPartial) {
           lastPartial = partial;
-          args.onDelta?.(partial);
+          emit(partial);
         }
       }
     } catch (err) {
@@ -368,14 +380,8 @@ export async function generateInterviewAnswer(args: {
       }
     }
   } else if (live) {
-    const source = [parsedRecommended, answer].find((text) => text && !looksLikeCodeDump(text) && !/SELECT \* FROM table1/i.test(text || "")) || "";
-    answer = toSpokenAnswer(source, askedForPoints);
-    if (!answer || looksLikeCodeDump(answer)) {
-      answer = toSpokenAnswer(spokenFallbackFor(question) || answer, askedForPoints);
-    }
-    if (!answer && isProcessQuestion(question)) {
-      answer = toSpokenAnswer(ACCESS_FALLBACK, askedForPoints);
-    }
+    const source = [parsedRecommended, answer].find((text) => text && !looksLikeCodeDump(text) && !/SELECT \* FROM table1/i.test(text || "")) || answer;
+    answer = toSpokenAnswer(source, askedForPoints) || source;
     sections = [];
   }
 
@@ -384,14 +390,11 @@ export async function generateInterviewAnswer(args: {
   const grounded = rewriteUngroundedExperience(answer, args.persona);
   answer = grounded.text;
   if (live && !answer) {
-    answer = "I didn't catch a clear English question. Press Listen again.";
+    answer = EMPTY_MODEL_ANSWER;
   }
   const quality = scoreEmployeeAnswer(answer, askedForCode, askedForPoints);
   if (live && !quality.ok && !askedForCode) {
-    const fallback = spokenFallbackFor(question);
-    if (fallback) answer = toSpokenAnswer(fallback, askedForPoints);
-    else if (isProcessQuestion(question)) answer = ACCESS_FALLBACK;
-    else answer = toSpokenAnswer(answer, askedForPoints);
+    answer = toSpokenAnswer(answer, askedForPoints) || answer;
   }
   const repetition = scoreRepetition(answer, thread.recentOpeners, thread.recentAnswers, thread.conceptsAlreadyCovered);
   if (args.persist !== false) {
@@ -399,6 +402,8 @@ export async function generateInterviewAnswer(args: {
   }
 
   return {
+    questionId,
+    generationId,
     question,
     normalizedQuestion: analysis.question,
     analysis,

@@ -5,6 +5,7 @@ import type {
 } from "openai/resources/chat/completions";
 
 export const FALLBACK_ANSWER_MODEL = "gpt-5.6-sol";
+export const ANSWER_MODEL = "gpt-5.6-sol";
 export const ANSWER_API_METHOD = "chat.completions.create";
 
 export type UpstreamAiError = {
@@ -88,18 +89,18 @@ export function annotateOpenAiError(
   return target;
 }
 
-export function resolveAnswerModel(requested?: string | null): string {
-  const fromEnv = String(process.env.OPENAI_MODEL || "").trim();
-  const allowed = new Set(
-    (process.env.OPENAI_ALLOWED_MODELS || `${FALLBACK_ANSWER_MODEL},gpt-4.1,gpt-4o`)
-      .split(",")
-      .map((model) => model.trim())
-      .filter(Boolean),
-  );
-  allowed.add(FALLBACK_ANSWER_MODEL);
-  if (fromEnv) allowed.add(fromEnv);
-  if (requested && allowed.has(requested)) return requested;
-  return fromEnv || FALLBACK_ANSWER_MODEL;
+export function canonicalizeAnswerModel(model: string): string {
+  const trimmed = String(model || "").trim();
+  if (/^5\.6-sol$/i.test(trimmed)) return ANSWER_MODEL;
+  return trimmed;
+}
+
+export function resolveAnswerModel(_requested?: string | null): string {
+  const fromEnv = canonicalizeAnswerModel(String(process.env.OPENAI_MODEL || "").trim());
+  if (fromEnv && fromEnv !== ANSWER_MODEL) {
+    // Client/env may still mention other chat models. Answers always use Sol.
+  }
+  return ANSWER_MODEL;
 }
 
 function isGpt5Family(model: string) {
@@ -115,7 +116,7 @@ type AnswerChatArgs = {
 };
 
 function answerChatBody(args: AnswerChatArgs) {
-  const model = process.env.OPENAI_MODEL || args.model || FALLBACK_ANSWER_MODEL;
+  const model = resolveAnswerModel(args.model);
   const shared = {
     model,
     messages: args.messages,

@@ -8,13 +8,15 @@ import { preparePersona, resolvePersona } from "../lib/persona";
 import { recallSessionMemory, warmSessionMemory } from "../lib/session-memory";
 import { generateInterviewAnswer, type InterviewUserPart } from "../lib/answer-generator";
 import { normalizeQuestion } from "../lib/question-analyzer";
+import { newQuestionIdentity } from "../lib/question-finalizer";
 import {
   isCodeIntent,
+  isHallucinatedTranscript,
   isMeaningQuestion,
   looksLikeUsEnglish,
 } from "../lib/answer-quality";
 import { CANDIDATE_IDENTITY, detectSpeakMode, speakModeCue, subjectContext } from "../lib/interview-voice";
-import { ANSWER_API_METHOD, buildAnswerChatParams, extractUpstreamError, FALLBACK_ANSWER_MODEL, resolveAnswerModel } from "../lib/answer-chat";
+import { ANSWER_API_METHOD, ANSWER_MODEL, buildAnswerChatParams, extractUpstreamError, resolveAnswerModel } from "../lib/answer-chat";
 
 const router = Router();
 
@@ -50,7 +52,7 @@ function publicAnalyzeError(err: unknown): {
   const base = {
     param: upstream.param,
     openaiRequestId: upstream.requestID,
-    model: String(anyErr?.model || process.env.OPENAI_MODEL || FALLBACK_ANSWER_MODEL),
+    model: String(anyErr?.model || ANSWER_MODEL),
     method: String(anyErr?.method || ANSWER_API_METHOD),
   };
   if (status === 429 && /rate_limit|rate limit/i.test(`${code} ${upstream.type} ${message}`)) {
@@ -91,7 +93,7 @@ function publicAnalyzeError(err: unknown): {
     error: message.slice(0, 180) || "Failed to analyze context",
   };
 }
-const DEFAULT_ANALYSIS_MODEL = process.env.OPENAI_MODEL || FALLBACK_ANSWER_MODEL;
+const DEFAULT_ANALYSIS_MODEL = ANSWER_MODEL;
 const DEFAULT_TRANSCRIPTION_MODEL = process.env.OPENAI_TRANSCRIPTION_MODEL || "gpt-4o-transcribe";
 const DEFAULT_EMBEDDING_MODEL = process.env.OPENAI_EMBEDDING_MODEL || "text-embedding-3-small";
 const DEFAULT_REALTIME_MODEL = process.env.OPENAI_REALTIME_MODEL || "gpt-realtime";
@@ -137,14 +139,6 @@ function extractJsonStringField(raw: string, field: string) {
   }
   return out;
 }
-
-const ALLOWED_ANALYSIS_MODELS = new Set(
-  (process.env.OPENAI_ALLOWED_MODELS || `${FALLBACK_ANSWER_MODEL},gpt-4.1,gpt-4o`)
-    .split(",")
-    .map((model) => model.trim())
-    .filter(Boolean),
-);
-ALLOWED_ANALYSIS_MODELS.add(FALLBACK_ANSWER_MODEL);
 
 function envInteger(name: string, fallback: number, min: number, max: number) {
   const value = Number.parseInt(process.env[name] ?? "", 10);
@@ -402,18 +396,6 @@ function sanitizeProductionCode(code: string): string {
     .replace(/s3:\/\/my-bucket\/[^\s'"`)]+/gi, "abfss://bronze@examplestorage.dfs.core.windows.net/inbound/")
     .replace(/['"]s3a:\/\/my-bucket\/?['"]/gi, "'abfss://bronze@examplestorage.dfs.core.windows.net/inbound/'")
     .replace(/['"]s3:\/\/my-bucket\/?['"]/gi, "'abfss://bronze@examplestorage.dfs.core.windows.net/inbound/'");
-}
-
-const JOIN_FALLBACK = "These are how I keep or drop rows when two tables meet.\n• Inner join keeps only matching keys.\n• Left join keeps every row from the driving table and fills nulls when the right side has no match.\n• Right join is the opposite.\nFor example I almost always left join employees to departments so I never drop someone who is not assigned yet.";
-const LAKEVIEW_FALLBACK = "I'd confirm which they mean, because two things get called lake view.\n• Databricks Lakeview is the dashboarding and AI/BI layer, not a table. For example analysts build those dashboards on Gold or a SQL warehouse.\n• A lakehouse view is a SQL view over Delta so people query a stable name without touching raw files.";
-const TRANSFORM_FALLBACK = "I don't think of load as a list of PySpark functions. In a typical Azure load I use bronze landing, then a notebook to type the columns we need.\n• Filter and select so bronze junk never reaches silver.\n• withColumn for derived fields and standard names.\n• Join reference data, and groupBy only when gold needs an aggregate.\n• Write Delta, and the next job reads that, not the raw files.";
-
-function spokenFallbackFor(question: string): string {
-  const t = String(question || "").toLowerCase();
-  if (/left join|right join|inner join|what do you mean by .{0,40}join/.test(t)) return JOIN_FALLBACK;
-  if (/lake ?view/.test(t)) return LAKEVIEW_FALLBACK;
-  if (/transformation/.test(t) && /load|used/.test(t)) return TRANSFORM_FALLBACK;
-  return "";
 }
 
 function hasPlaceholderContent(text: string): boolean {
@@ -803,17 +785,21 @@ router.post("/openai/analyze", async (req, res) => {
     return;
   }
 
-  const { transcript, screenshotBase64, uploadedDocs, history = [], mode, model: requestedModel, sessionId } = parsed.data;
+  const { transcript, screenshotBase64, uploadedDocs, history = [], mode, sessionId } = parsed.data;
     const spent = await takeCredits(req, res, CREDIT_COSTS.analyze);
   if (!spent) return;
   void warmSessionMemory(req.authUser!.id);
-  const analysisModel = resolveAnswerModel(
-    requestedModel && ALLOWED_ANALYSIS_MODELS.has(requestedModel) ? requestedModel : null,
-  );
+  const analysisModel = resolveAnswerModel();
   const explicitQuestion = extractExplicitQuestion(transcript);
-  if (explicitQuestion && !looksLikeUsEnglish(explicitQuestion)) {
+  const identity = newQuestionIdentity(explicitQuestion || transcript || "");
+  const bodyMeta = req.body && typeof req.body === "object" ? req.body as Record<string, unknown> : {};
+  const questionId = String(bodyMeta.questionId || identity.questionId);
+  const generationId = String(bodyMeta.generationId || identity.generationId);
+  if (explicitQuestion && isHallucinatedTranscript(explicitQuestion)) {
     const restored = await grantCredits(req.authUser!.id, CREDIT_COSTS.analyze).catch(() => null);
     res.json({
+      questionId,
+      generationId,
       question: "Unclear audio",
       questionType: "general",
       answer: "I didn't catch a clear English question. Press Listen when they ask again.",
@@ -882,7 +868,7 @@ router.post("/openai/analyze", async (req, res) => {
     }
     const inferredQuestion = normalizeQuestion(explicitQuestion ?? transcript ?? "");
     const generated = await generateInterviewAnswer({
-      question: inferredQuestion,
+      question: explicitQuestion ?? transcript ?? "",
       userId: req.authUser!.id,
       sessionId,
       persona,
@@ -891,9 +877,19 @@ router.post("/openai/analyze", async (req, res) => {
       live: true,
       persist: true,
       extraUserParts,
+      questionId,
+      generationId,
       onDelta: streamToClient
-        ? (partial) => {
-            res.write(`${JSON.stringify({ type: "delta", question: explicitQuestion || "", answer: partial })}\n`);
+        ? (partial, meta) => {
+            res.write(`${JSON.stringify({
+              type: "delta",
+              questionId: meta?.questionId || questionId,
+              generationId: meta?.generationId || generationId,
+              question: explicitQuestion || inferredQuestion || "",
+              answer: partial,
+              status: "generating",
+              model: analysisModel,
+            })}\n`);
             if (typeof (res as Response & { flush?: () => void }).flush === "function") {
               (res as Response & { flush: () => void }).flush();
             }
@@ -923,6 +919,8 @@ router.post("/openai/analyze", async (req, res) => {
     if (!analysis.isAnswerable || analysis.isIncomplete) {
       const restored = await grantCredits(req.authUser!.id, CREDIT_COSTS.analyze).catch(() => null);
       const payload = {
+        questionId,
+        generationId,
         question: analysis.isIncomplete ? "Incomplete question" : "Not a question",
         questionType: "general",
         answer: analysis.isIncomplete
@@ -932,6 +930,7 @@ router.post("/openai/analyze", async (req, res) => {
         suggestions: [],
         confidence: "low" as const,
         sections: [],
+        status: "error",
         credits: restored?.credits ?? spent.credits,
       };
       if (streamToClient) {
@@ -981,7 +980,10 @@ router.post("/openai/analyze", async (req, res) => {
     });
 
     const payload = {
+      questionId: generated.questionId || questionId,
+      generationId: generated.generationId || generationId,
       question: safeQuestion,
+      normalizedQuestion: generated.normalizedQuestion || inferredQuestion,
       questionType,
       answer,
       keyPoints: generated.keyPoints,
@@ -991,6 +993,8 @@ router.post("/openai/analyze", async (req, res) => {
         ? "low"
         : analysis.confidence >= 0.85 ? "high" : analysis.confidence >= 0.7 ? "medium" : "low",
       sections: askedForCode ? generated.sections : [],
+      status: "done",
+      model: analysisModel,
       credits: spent.credits,
     };
     if (streamToClient) {
@@ -1114,10 +1118,11 @@ router.post("/openai/transcribe", async (req, res) => {
         : ((transcription as { text?: string }).text ?? "");
     const text = raw.replace(/\s+/g, " ").trim();
     const english = looksLikeUsEnglish(text);
+    const keepTranscript = Boolean(text) && !isHallucinatedTranscript(text);
     if (text && !english) {
-      req.log.info({ event: "transcribe.english_reject", preview, chars: text.length });
+      req.log.info({ event: "transcribe.english_soft", preview, chars: text.length });
     }
-    res.json({ transcript: english ? text : "", credits: spent?.credits });
+    res.json({ transcript: keepTranscript ? text : "", credits: spent?.credits });
   } catch (err) {
     if (!preview) {
       await grantCredits(req.authUser!.id, CREDIT_COSTS.transcribe).catch(() => undefined);

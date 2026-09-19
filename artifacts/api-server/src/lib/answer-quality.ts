@@ -17,7 +17,8 @@ const FOREIGN_FUNCTION_WORDS = new Set([
   "tardo", "diario", "kocham", "bueno", "gracias", "hola", "porque", "pero", "muy", "aqui", "ahora",
 ]);
 const HALLUCINATED_TRANSCRIPT = /thanks for watching|thank you for watching|please subscribe|the boy ran quickly|\[music\]|\[silence\]|rewrite:|clarifying:|greeting:|translation:|subtitle:|respond to /i;
-const SHORT_TECH_ASK = /\b(delta|databricks|adf|fabric|snowflake|spark|pyspark|kafka|unity catalog|direct lake|scd(?:\s*type)?|cdc|watermark|power bi|synapse|dlt|lakehouse|parquet|unity)\b/i;
+const SHORT_TECH_ASK = /\b(delta|databricks|adf|fabric|snowflake|spark|pyspark|kafka|unity catalog|direct lake|scd(?:\s*type)?|cdc|watermark|power bi|synapse|dlt|lakehouse|parquet|unity|sql|python|pipeline|schema|duplicate|incremental|merge)\b/i;
+const CODING_SHORTHAND = /\b(write|show|give|paste|implement)\b.{0,48}\b(code|sql|query|script|pyspark|python|scd|merge|window)\b/i;
 const TITLED_BOX = /^\s*(contextual explanation|cluster inventory confirmation|explanation|interview tip|follow-?up|details|notes|what is data skew.*|architecture|definition|implementation|best practices)\s*:?\s*$/im;
 const ALL_CAPS_TITLE = /^\s*[A-Z][A-Z0-9 /,&:\-]{10,}\s*$/m;
 const GENERIC_AI = /\b(as an ai|great question|based on the (information|conversation|transcript) provided|as a data engineer with \d+|in my role as an azure data engineer and databricks administrator)\b|certainly[!.,]|passionate and results-driven|proven track record|organizational excellence|stakeholder management|in conclusion|let'?s delve|first and foremost|there are several key (factors|points|aspects)/i;
@@ -86,14 +87,20 @@ export function scoreSpokenStyle(answer: string, intent?: string): SpokenStyleRe
   };
 }
 
+export function isHallucinatedTranscript(text: string) {
+  return HALLUCINATED_TRANSCRIPT.test(String(text || "").replace(/\s+/g, " ").trim());
+}
+
 export function looksLikeUsEnglish(text: string) {
   const value = String(text || "").replace(/\s+/g, " ").trim();
   if (!value) return false;
   if (/[\u0900-\u097F\u0980-\u09FF\u0A00-\u0A7F\u0A80-\u0AFF\u0B00-\u0B7F\u0C00-\u0C7F\u0C80-\u0CFF\u0D00-\u0D7F]/.test(value)) {
     return false;
   }
-  if (HALLUCINATED_TRANSCRIPT.test(value)) return false;
+  if (isHallucinatedTranscript(value)) return false;
   const words = value.toLowerCase().replace(/[^a-z'\s]/g, " ").split(/\s+/).filter(Boolean);
+  if (SHORT_TECH_ASK.test(value) && words.length >= 2) return true;
+  if (CODING_SHORTHAND.test(value)) return true;
   const shortTech = words.length <= 6 && SHORT_TECH_ASK.test(value) && (
     ENGLISH_QUESTION.test(value) || /[?]/.test(value) || /\bvs\.?\b|versus/i.test(value)
   );
@@ -103,7 +110,9 @@ export function looksLikeUsEnglish(text: string) {
   const strongEnglish = words.filter((word) => ENGLISH_FUNCTION_WORDS.has(word) && !WEAK_ENGLISH_WORDS.has(word)).length;
   const foreignHits = words.filter((word) => FOREIGN_FUNCTION_WORDS.has(word)).length;
   if (foreignHits > 0 && foreignHits >= strongEnglish) return false;
-  if (words.length < 5 && !ENGLISH_QUESTION.test(value)) return false;
+  if (words.length < 5 && !ENGLISH_QUESTION.test(value) && !/\b(write|implement|optimize|handle|suppose|pipeline|schema|duplicate)\b/i.test(value)) {
+    return false;
+  }
   if (strongEnglish === 0 && words.length < 6) return false;
   if (englishHits === 0) return false;
   return true;

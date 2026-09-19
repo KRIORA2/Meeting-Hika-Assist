@@ -891,6 +891,7 @@ function PiPContent({
   const micActiveRef = useRef(false);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const isAnalyzingRef = useRef(false);
+  const analyzeGenerationRef = useRef(0);
   const [isTranscribing, setIsTranscribing] = useState(false);
   const [recordingSeconds, setRecordingSeconds] = useState(0);
   const [micError, setMicError] = useState<string | null>(null);
@@ -989,17 +990,16 @@ function PiPContent({
   }, [createInsight, queryClient]);
 
   const runAnalysis = useCallback(async (opts: { question?: string; transcript?: string; utterance?: string } = {}) => {
-    if (isAnalyzingRef.current) return;
     const { question, utterance } = opts;
-    // utterance = the single latest thing the client just said (most focused)
-    // question  = manual typed question from the user
-    // transcript = fallback full text
     const latestText = utterance ?? question ?? opts.transcript ?? transcriptRef.current;
     if (!latestText) return;
     if (isIncompleteQuestion(latestText)) {
       setMicError("I caught your speech, but the question seems incomplete.");
       return;
     }
+    const generation = ++analyzeGenerationRef.current;
+    const questionId = `q_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+    const generationId = `g_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
     isAnalyzingRef.current = true;
     setIsAnalyzing(true);
     setAnswerReady(false);
@@ -1048,8 +1048,7 @@ function PiPContent({
     const userTurn = latestText.trim();
 
     try {
-      const storedModel = typeof window !== "undefined" ? window.localStorage.getItem("hika-ai-model") : null;
-      const preferredModel = !storedModel || storedModel === "gpt-4o" ? "gpt-5.6-sol" : storedModel;
+      const preferredModel = "gpt-5.6-sol";
 
       const result = await analyzeContext.mutateAsync({
         data: {
@@ -1060,8 +1059,12 @@ function PiPContent({
           model: preferredModel,
           mode: sessionMode,
           history: historyForRequest,
+          questionId,
+          generationId,
         },
       } as any);
+
+      if (analyzeGenerationRef.current !== generation) return;
 
       const answer = result.answer?.trim() ?? "No answer available for the current context.";
       const nextHistory: Array<{ role: "user" | "assistant"; content: string }> = [
@@ -1091,11 +1094,14 @@ function PiPContent({
       );
       setAnswerReady(true);
     } catch (error) {
+      if (analyzeGenerationRef.current !== generation) return;
       if (question) setManualQ(question);
       setMicError(error instanceof Error ? error.message : "Hikanest could not generate an answer. Please try again.");
     } finally {
-      isAnalyzingRef.current = false;
-      setIsAnalyzing(false);
+      if (analyzeGenerationRef.current === generation) {
+        isAnalyzingRef.current = false;
+        setIsAnalyzing(false);
+      }
     }
   }, [captureScreenshot, analyzeContext, persistInsight, sessionMode]);
 

@@ -18,7 +18,7 @@ import {
   FILLER,
   isIncompleteQuestion as isIncompleteStem,
   looksLikeFollowUpShape,
-  normalizeSpokenQuestion,
+  normalizeInterviewEnglish,
 } from "./question-finalizer";
 
 export type InterviewIntent =
@@ -107,6 +107,7 @@ export type QuestionAnalysis = {
 };
 
 const TECH_ALIASES: Array<{ id: string; pattern: RegExp; label: string }> = [
+  { id: "cdc", pattern: /\b(cdc|change data capture)\b/i, label: "CDC" },
   { id: "adf", pattern: /\b(adf|azure data factory|data factory)\b/i, label: "ADF" },
   { id: "databricks", pattern: /\b(databricks|\badb\b)\b/i, label: "Databricks" },
   { id: "spark", pattern: /\b(pyspark|apache spark|\bspark\b)\b/i, label: "Spark" },
@@ -165,11 +166,11 @@ type IntentRule = {
 
 const INTENT_RULES: IntentRule[] = [
   { name: "coding", intent: "coding", confidence: 0.95, test: (t) => isCodeIntent(t) },
-  { name: "comparison", intent: "comparison", confidence: 0.93, test: (t) => /(difference between|\bvs\.?\b|versus|compared to|compare )/i.test(t) || (/\binstead of\b/i.test(t) && !/^why\b/i.test(t) && !/(api instead|source was an api)/i.test(t)) },
+  { name: "comparison", intent: "comparison", confidence: 0.93, test: (t) => /(difference between|tell(?: me)?(?: the)? difference|\bvs\.?\b|versus|compared to|compare )/i.test(t) || (/\binstead of\b/i.test(t) && !/^why\b/i.test(t) && !/(api instead|source was an api)/i.test(t)) },
   { name: "tradeoff", intent: "tradeoff", confidence: 0.9, test: (t) => /\btrade-?offs?\b/i.test(t) },
   { name: "why_not", intent: "why_not", confidence: 0.9, test: (t) => /\bwhy (not|wouldn't|don't you)\b/i.test(t) },
   { name: "when_not", intent: "when_not_to_use", confidence: 0.88, test: (t) => /(when (do|would|should) (you|we) not use|when not to use)/i.test(t) },
-  { name: "failure_halfway", intent: "failure_handling", confidence: 0.94, test: (t) => /(failed halfway|fails? halfway|job failed|pipeline fails|merge failure|what would happen if .{0,40}fail|what happens if .{0,40}fail)/i.test(t) },
+  { name: "failure_halfway", intent: "failure_handling", confidence: 0.94, test: (t) => /(failed halfway|fails? halfway|fail halfway|job failed|pipeline fail|pipeline fails|merge failure|what would happen if .{0,40}fail|what happens? if .{0,40}fail|what happen)/i.test(t) && /fail/i.test(t) },
   { name: "challenge_prod", intent: "limitations", confidence: 0.86, test: (t) => /(wouldn't that|doesn't that|are you sure).{0,40}(fail|break|fall over|production)/i.test(t) || /\bwouldn'?t\b.{0,40}\b(fail|break|fall over)\b/i.test(t) },
   { name: "incident", intent: "incident", confidence: 0.9, test: (t) => /\b(incident|rca|root cause analysis|sev[0-9]|on[- ]call)\b/i.test(t) },
   { name: "failure_named", intent: "failure_handling", confidence: 0.92, test: (t) => /\b(failures?|failed run|failed job|isn't updated|is not updated)\b/i.test(t) && /(handle|what if|happen|when|would)/i.test(t) },
@@ -178,7 +179,8 @@ const INTENT_RULES: IntentRule[] = [
   { name: "monitor", intent: "how_to_monitor", confidence: 0.9, test: (t) => /(how (do|would|can) (you |we )?(monitor|alert|observe)|observability|alerting)/i.test(t) },
   { name: "deploy", intent: "how_to_deploy", confidence: 0.9, test: (t) => /(how (do|would|can) (you |we )?(deploy|promote|release)|dev to (uat|test|prod)|rollback)/i.test(t) },
   { name: "configure", intent: "how_to_configure", confidence: 0.88, test: (t) => /(how (do|would|can) (you |we )?(configure|set up|setup|parameterize))/i.test(t) },
-  { name: "quality", intent: "data_quality", confidence: 0.88, test: (t) => /(data quality|reconcil|schema drift|quarantine bad|duplicate check)/i.test(t) },
+  { name: "schema_change", intent: "how_to_handle", confidence: 0.9, test: (t) => /schema chang/i.test(t) },
+  { name: "quality", intent: "data_quality", confidence: 0.88, test: (t) => /(data quality|reconcil|schema drift|quarantine bad|duplicate check)/i.test(t) && !/schema chang/i.test(t) },
   { name: "optimize", intent: "optimization", confidence: 0.92, test: (t) => /(optimiz|performance|tune |speed up|predicate pushdown|query folding)/i.test(t) },
   { name: "identify_paraphrase", intent: "how_to_identify", confidence: 0.88, test: (t) => /(know what changed|detect (the )?chang|spot (the )?chang|tell (what|which) (rows?|records) changed|source exposes changes|how do you detect)/i.test(t) && !/(doesn'?t|no reliable)/i.test(t) },
   { name: "identify_verb", intent: "how_to_identify", confidence: 0.94, test: (t) => /(how (do|would|can) (you |we )?(identify|detect|spot|tell)|how .* identifi|change detection)/i.test(t) },
@@ -187,12 +189,12 @@ const INTENT_RULES: IntentRule[] = [
   { name: "no_timestamp", intent: "scenario", confidence: 0.86, test: (t) => /(doesn'?t (give|provide|have)|no (reliable )?timestamp|source doesn'?t)/i.test(t) },
   { name: "api_instead", intent: "scenario", confidence: 0.85, test: (t) => /(if the source was an api|api instead|source was an api)/i.test(t) },
   { name: "implement_paraphrase", intent: "how_to_implement", confidence: 0.88, test: (t) => /(take me through the implementation|walk me through (the |how (you|'d|you would) )implement|how (you|'d) (actually )?build)/i.test(t) },
-  { name: "implement_verb", intent: "how_to_implement", confidence: 0.94, test: (t) => /(how (do|would|can) (you |we )?implement)/i.test(t) },
+  { name: "implement_verb", intent: "how_to_implement", confidence: 0.94, test: (t) => /(how (do|would|can)? ?(you |we )?implement|how implement\b)/i.test(t) },
   { name: "implement_bare", intent: "how_to_implement", confidence: 0.78, test: (t) => /^implement\b/i.test(t) && !isCodeIntent(t) },
   { name: "design", intent: "how_to_design", confidence: 0.9, test: (t) => /(how (do|would|can) (you |we )?design)/i.test(t) },
   { name: "scalability", intent: "scalability", confidence: 0.9, test: (t) => /(10\s?tb|very large|at scale|scale out|same design at|would (that|it|your approach) (still )?work)/i.test(t) },
   { name: "approach", intent: "how_to_handle", confidence: 0.84, test: (t) => /(your approach|approach to|make (that|it) reliable)/i.test(t) },
-  { name: "handle_verb", intent: "how_to_handle", confidence: 0.93, test: (t) => /(how (do|would|can) (you |we )?handle)/i.test(t) },
+  { name: "handle_verb", intent: "how_to_handle", confidence: 0.93, test: (t) => /(how (do|would|can)? ?(you |we )?handle|how handle\b|duplicate records how handle)/i.test(t) },
   { name: "idempotent", intent: "how_to_handle", confidence: 0.9, test: (t) => /\bidempot/i.test(t) },
   { name: "why_choose", intent: "why", confidence: 0.91, test: (t) => /^why\b|why (do|did|would) (you|we)|why (use|choose|did you choose|this approach)/i.test(t) },
   { name: "when_to_use", intent: "when_to_use", confidence: 0.9, test: (t) => /(when (do|would|should) (you|we) use|when to use)/i.test(t) },
@@ -209,12 +211,12 @@ const INTENT_RULES: IntentRule[] = [
   { name: "challenge_generic", intent: "scenario", confidence: 0.8, test: (t) => /^(are you sure|wouldn'?t that|doesn'?t that|why not just|wouldn'?t \w+ (fail|work|break|scale))\b/i.test(t) },
   { name: "clarification", intent: "clarification", confidence: 0.86, test: (t) => /(what do you mean|clarify|in other words)/i.test(t) },
   { name: "how_does_work", intent: "how_to_implement", confidence: 0.8, test: (t) => /how does .{0,80} work/i.test(t) },
-  { name: "definition", intent: "definition", confidence: 0.8, test: (t) => /(what is|what are|what's|explain|define )/i.test(t) },
+  { name: "definition", intent: "definition", confidence: 0.8, test: (t) => /(what is|what are|what's|what does .{0,40} mean|explain|define |means what)/i.test(t) },
   { name: "generic_how", intent: "how_to_implement", confidence: 0.62, test: (t) => /(how (do|would|can) (you|we))/i.test(t) },
 ];
 
 export function normalizeQuestion(text: string): string {
-  return normalizeSpokenQuestion(text);
+  return normalizeInterviewEnglish(text);
 }
 
 export function classifyIntent(question: string): IntentClassification {
