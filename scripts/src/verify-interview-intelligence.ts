@@ -411,6 +411,12 @@ const aboutDatabricks = analyzeQuestion("What about Databricks?", adfThread);
 assert.equal(aboutDatabricks.topic, "databricks");
 assert.equal(aboutDatabricks.isFollowUp, false);
 assert.equal(aboutDatabricks.relationToPreviousQuestion, "new_topic");
+const dbOpt = analyzeQuestion("How do you optimize Databricks?");
+const aboutSkew = analyzeQuestion("What about data skew?", dbOpt);
+assert.equal(aboutSkew.isFollowUp, true);
+assert.notEqual(aboutSkew.relationToPreviousQuestion, "new_topic");
+const snowflakeRewrite = rewriteUngroundedExperience("In my current project we use Snowflake for warehousing.", resumeAdf);
+assert.match(snowflakeRewrite.text, /haven't worked with Snowflake directly/i);
 assert.match(subjectContext("How do you optimize Power BI performance?", "optimization", "powerbi"), /folding|Direct|star/i);
 assert.match(subjectContext("How do you secure Databricks?", "security", "unity"), /catalog|group|principal/i);
 

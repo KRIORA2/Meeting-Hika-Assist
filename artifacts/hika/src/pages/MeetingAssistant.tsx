@@ -21,7 +21,7 @@ import {
 import { cn } from "@/lib/utils";
 import { getAccessToken } from "@/lib/auth";
 import { prepareInterviewPersona } from "@/lib/prepare-persona";
-import { isIncompleteQuestion } from "@/lib/question-finalizer";
+import { isIncompleteQuestion, mergeSpokenTranscript } from "@/lib/question-finalizer";
 import InsightAnswer from "@/components/InsightAnswer";
 import { acceptsRealtimeResponseEvent, appendRealtimeDelta } from "@/services/realtimeProtocol";
 
@@ -845,6 +845,10 @@ function PiPContent({
   const speechFinalRef = useRef("");
   const allChunksRef = useRef<Blob[]>([]);       // accumulated raw audio for this recording
   const interimBusyRef = useRef(false);             // prevent overlapping interim API calls
+  const captureGenerationRef = useRef(0);
+  const listenPhaseRef = useRef<"idle" | "starting" | "listening" | "stopping" | "waiting_stt" | "generating">("idle");
+  const pendingSttRef = useRef(0);
+  const stopInFlightRef = useRef(false);
   const recordTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const sessionIdRef = useRef<number | null>(null);
@@ -993,7 +997,7 @@ function PiPContent({
     const latestText = utterance ?? question ?? opts.transcript ?? transcriptRef.current;
     if (!latestText) return;
     if (isIncompleteQuestion(latestText)) {
-      setMicError("That sounded incomplete. Press Listen until they finish the question.");
+      setMicError("I caught your speech, but the question seems incomplete.");
       return;
     }
     isAnalyzingRef.current = true;
@@ -1436,24 +1440,44 @@ function PiPContent({
     }
   }, [stopLiveSpeech]);
 
-  const doInterimTranscription = useCallback(async (blob: Blob, mimeType: string) => {
-    if (interimBusyRef.current || liveTranscriptRef.current) return;
+  const doInterimTranscription = useCallback(async (blob: Blob, mimeType: string, generation: number) => {
+    if (generation !== captureGenerationRef.current) return;
+    const phase = listenPhaseRef.current;
+    if (phase !== "listening" && phase !== "stopping" && phase !== "starting") return;
+    pendingSttRef.current += 1;
     interimBusyRef.current = true;
     try {
       const base64 = await blobToBase64(blob);
       const result = await transcribeAudio.mutateAsync({ data: { audioBase64: base64, mimeType } });
       const text = result.transcript?.trim() ?? "";
-      if (micActiveRef.current && text && !liveTranscriptRef.current) {
-        liveTranscriptRef.current = text;
-        setLiveTranscript(text);
-      }
+      if (generation !== captureGenerationRef.current || !text) return;
+      const merged = mergeSpokenTranscript(liveTranscriptRef.current || "", text);
+      liveTranscriptRef.current = merged;
+      setLiveTranscript(merged);
     } catch { /* interim errors are silent */ }
-    finally { interimBusyRef.current = false; }
+    finally {
+      pendingSttRef.current = Math.max(0, pendingSttRef.current - 1);
+      interimBusyRef.current = false;
+    }
   }, [transcribeAudio]);
 
   const stopMicRecording = useCallback(() => {
-    if (!micActiveRef.current && !recorderRef.current) return;
+    if (stopInFlightRef.current) return;
+    const phase = listenPhaseRef.current;
+    if (phase === "stopping" || phase === "waiting_stt" || phase === "generating") return;
+    if (!micActiveRef.current && !recorderRef.current && phase !== "starting") return;
+    stopInFlightRef.current = true;
+    listenPhaseRef.current = "stopping";
     stopLiveSpeech();
+    if (phase === "starting" && !recorderRef.current) {
+      captureGenerationRef.current += 1;
+      micActiveRef.current = false;
+      setMicActive(false);
+      listenPhaseRef.current = "idle";
+      stopInFlightRef.current = false;
+      setMicError("Microphone was still starting. Press Listen, then speak.");
+      return;
+    }
     if (realtimePeerRef.current?.connectionState === "connected" && realtimeDataRef.current?.readyState === "open") {
       micActiveRef.current = false;
       setMicActive(false);
@@ -1469,11 +1493,13 @@ function PiPContent({
     }
     stopRealtimeStreaming();
     if (recorderRef.current?.state === "recording") {
-      recorderRef.current.stop(); // onstop handles everything
+      try { recorderRef.current.requestData?.(); } catch { /* ignore */ }
+      recorderRef.current.stop();
     } else {
       micActiveRef.current = false;
       setMicActive(false);
-      setLiveTranscript(null);
+      listenPhaseRef.current = "idle";
+      stopInFlightRef.current = false;
     }
   }, [stopRealtimeStreaming, stopLiveSpeech]);
 
@@ -1602,14 +1628,21 @@ function PiPContent({
   }, [getOrCreateMicStream, getSystemAudioTrack, startAudioMeters]);
 
   const startMicRecording = useCallback(async () => {
-    if (micActiveRef.current) return;
+    const phase = listenPhaseRef.current;
+    if (micActiveRef.current || phase === "starting" || phase === "listening" || phase === "stopping" || phase === "waiting_stt" || phase === "generating") return;
     setMicError(null);
+    captureGenerationRef.current += 1;
+    const generation = captureGenerationRef.current;
+    listenPhaseRef.current = "starting";
+    stopInFlightRef.current = false;
+    pendingSttRef.current = 0;
     micActiveRef.current = true;
     setMicActive(true);
-    liveTranscriptRef.current = null;
+    liveTranscriptRef.current = "";
     setLiveTranscript(null);
     try {
       const fallbackMicStream = await getOrCreateMicStream();
+      if (generation !== captureGenerationRef.current || listenPhaseRef.current !== "starting") return;
       const mimeType = MediaRecorder.isTypeSupported("audio/webm;codecs=opus") ? "audio/webm;codecs=opus"
         : MediaRecorder.isTypeSupported("audio/webm") ? "audio/webm"
           : "audio/ogg;codecs=opus";
@@ -1628,69 +1661,83 @@ function PiPContent({
       recorder.ondataavailable = (e) => {
         if (!e.data?.size) return;
         allChunksRef.current.push(e.data);
-        if (!micActiveRef.current) return;
+        const allow = listenPhaseRef.current === "starting" || listenPhaseRef.current === "listening" || listenPhaseRef.current === "stopping";
+        if (!allow || generation !== captureGenerationRef.current) return;
         if (e.data.size < 500) return;
-        doInterimTranscription(e.data, mimeType);
+        void doInterimTranscription(e.data, mimeType, generation);
       };
 
       recorder.onstop = async () => {
+        const stopGeneration = captureGenerationRef.current;
+        listenPhaseRef.current = "waiting_stt";
         micActiveRef.current = false;
         recorderRef.current = null;
         setMicActive(false);
         stopLiveSpeech();
+        const waitStarted = Date.now();
+        while (pendingSttRef.current > 0 && Date.now() - waitStarted < 8000) {
+          await new Promise((resolve) => setTimeout(resolve, 50));
+        }
+        if (stopGeneration !== captureGenerationRef.current) {
+          stopInFlightRef.current = false;
+          listenPhaseRef.current = "idle";
+          return;
+        }
 
         const live = (liveTranscriptRef.current || "").replace(/\s+/g, " ").trim();
-        liveTranscriptRef.current = null;
-        setLiveTranscript(null);
-
-        if (isIncompleteQuestion(live)) {
-          setMicError("That sounded incomplete. Press Listen until they finish the question.");
-          return;
-        }
-
-        if (live.split(/\s+/).filter(Boolean).length >= 6) {
-          const updated = transcriptRef.current ? `${transcriptRef.current} ${live}` : live;
-          transcriptRef.current = updated;
-          setChunks((prev) => [...prev, {
-            id: crypto.randomUUID(),
-            text: live,
-            timestamp: new Date(),
-            isQuestion: looksLikeQuestion(live),
-          }]);
-          runAnalysis({ utterance: live });
-          return;
-        }
-
+        let finalText = live;
+        let sttFailed = false;
         const blob = new Blob(allChunksRef.current, { type: mimeType });
-        if (blob.size < 500) return;
-
         setIsTranscribing(true);
         try {
-          const base64 = await blobToBase64(blob);
-          const result = await transcribeAudio.mutateAsync({ data: { audioBase64: base64, mimeType } });
-          const finalText = result.transcript?.trim() ?? "";
-
-          if (finalText) {
-            if (isIncompleteQuestion(finalText)) {
-              setMicError("That sounded incomplete. Press Listen until they finish the question.");
-              return;
-            }
-            const updated = transcriptRef.current ? `${transcriptRef.current} ${finalText}` : finalText;
-            transcriptRef.current = updated;
-            setChunks((prev) => [...prev, {
-              id: crypto.randomUUID(),
-              text: finalText,
-              timestamp: new Date(),
-              isQuestion: looksLikeQuestion(finalText),
-            }]);
-            runAnalysis({ utterance: finalText });
+          if (blob.size >= 500) {
+            const base64 = await blobToBase64(blob);
+            const result = await transcribeAudio.mutateAsync({ data: { audioBase64: base64, mimeType } });
+            const incoming = result.transcript?.trim() ?? "";
+            finalText = mergeSpokenTranscript(live, incoming) || incoming || live;
           }
         } catch (err) {
           console.error("TRANSCRIBE ERROR:", err);
-          setMicError("Transcription failed — please try again.");
+          sttFailed = true;
         } finally {
           setIsTranscribing(false);
         }
+
+        if (stopGeneration !== captureGenerationRef.current) {
+          stopInFlightRef.current = false;
+          listenPhaseRef.current = "idle";
+          return;
+        }
+        if (!finalText) {
+          setMicError(sttFailed ? "Transcription failed. Please try again." : "No clear speech was detected.");
+          listenPhaseRef.current = "idle";
+          stopInFlightRef.current = false;
+          return;
+        }
+        if (isIncompleteQuestion(finalText)) {
+          liveTranscriptRef.current = finalText;
+          setLiveTranscript(finalText);
+          setMicError("I caught your speech, but the question seems incomplete.");
+          listenPhaseRef.current = "idle";
+          stopInFlightRef.current = false;
+          return;
+        }
+
+        const updated = transcriptRef.current ? `${transcriptRef.current} ${finalText}` : finalText;
+        transcriptRef.current = updated;
+        liveTranscriptRef.current = finalText;
+        setLiveTranscript(null);
+        setChunks((prev) => [...prev, {
+          id: crypto.randomUUID(),
+          text: finalText,
+          timestamp: new Date(),
+          isQuestion: looksLikeQuestion(finalText),
+        }]);
+        listenPhaseRef.current = "generating";
+        void runAnalysis({ utterance: finalText }).finally(() => {
+          listenPhaseRef.current = "idle";
+          stopInFlightRef.current = false;
+        });
       };
 
       recorder.onerror = () => {
@@ -1698,22 +1745,31 @@ function PiPContent({
         micActiveRef.current = false;
         setMicActive(false);
         setLiveTranscript(null);
+        listenPhaseRef.current = "idle";
+        stopInFlightRef.current = false;
         stopLiveSpeech();
       };
 
       recorder.start(400);
+      startLiveSpeech();
+      listenPhaseRef.current = "listening";
     } catch (err) {
       const denied = err instanceof DOMException && (err.name === "NotAllowedError" || err.name === "PermissionDeniedError");
-      setMicError(denied ? "Microphone access denied — allow mic permission in your browser settings." : "Could not access microphone or meeting audio.");
+      setMicError(denied ? "Microphone access failed." : "Could not access microphone or meeting audio.");
       micActiveRef.current = false;
       setMicActive(false);
+      listenPhaseRef.current = "idle";
+      stopInFlightRef.current = false;
       stopLiveSpeech();
       stopAuxAudioCapture();
     }
   }, [doInterimTranscription, getOrCreateMicStream, transcribeAudio, runAnalysis, startLiveSpeech, stopLiveSpeech, stopAuxAudioCapture]);
 
   const toggleMic = useCallback(() => {
-    if (micActiveRef.current) stopMicRecording(); else startMicRecording();
+    const phase = listenPhaseRef.current;
+    if (phase === "stopping" || phase === "waiting_stt" || phase === "generating") return;
+    if (micActiveRef.current || phase === "starting" || phase === "listening") stopMicRecording();
+    else startMicRecording();
   }, [startMicRecording, stopMicRecording]);
 
   // Rebuild a single legacy audio pipeline only after Realtime has fully

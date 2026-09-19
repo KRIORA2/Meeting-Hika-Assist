@@ -13,6 +13,7 @@ import {
   matchingSubjects,
   subjectContext,
 } from "../../artifacts/api-server/src/lib/interview-voice.ts";
+import { mergeSpokenTranscript } from "../../artifacts/api-server/src/lib/question-finalizer.ts";
 
 assert.ok(pack.length >= 15, "Golden pack must freeze at least 15 interview questions");
 
@@ -63,8 +64,19 @@ assert.equal(matchFrozenAnswer("How would you map this Azure data platform onto 
 assert.equal(matchFrozenAnswer("What is the difference between Docker and Kubernetes?")?.id, "k8s-vs-docker");
 assert.equal(matchFrozenAnswer("What is RAG and how would you ground an assistant on internal docs?")?.id, "what-is-rag");
 assert.equal(looksLikeUsEnglish("Could you please explain about data skew?"), true);
+assert.equal(looksLikeUsEnglish("Why Delta?"), true);
+assert.equal(looksLikeUsEnglish("Direct Lake?"), true);
+assert.equal(looksLikeUsEnglish("ADF vs Databricks?"), true);
 assert.equal(looksLikeUsEnglish("No tardo mucho, diario kocham"), false);
 assert.equal(looksLikeUsEnglish("Alsof de hemel het"), false);
+assert.equal(
+  mergeSpokenTranscript("How do you implement", "How do you implement incremental loading in ADF?"),
+  "How do you implement incremental loading in ADF?",
+);
+assert.equal(
+  mergeSpokenTranscript("How do you implement incremental loading", "incremental loading in ADF?"),
+  "How do you implement incremental loading in ADF?",
+);
 
 const queryAnswer = scoreEmployeeAnswer(
   "I use a window and keep row_number = 1.\n• Partition by event_id\n• Write that to silver",

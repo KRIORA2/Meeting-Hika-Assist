@@ -40,6 +40,31 @@ export function isIncompleteQuestion(question: string): boolean {
   return false;
 }
 
+export function mergeSpokenTranscript(existing: string, incoming: string): string {
+  const next = normalizeSpokenQuestion(incoming);
+  const current = normalizeSpokenQuestion(existing);
+  if (!next) return current;
+  if (!current) return next;
+  if (current === next || current.endsWith(next)) return current;
+  if (next.startsWith(current) && next.length > current.length) return next;
+  if (current.includes(next) && current.length >= next.length) return current;
+  if (next.includes(current) && next.length > current.length) return next;
+  const maxChars = Math.min(current.length, next.length);
+  for (let n = maxChars; n >= 8; n -= 1) {
+    if (current.slice(-n) === next.slice(0, n)) {
+      return `${current}${next.slice(n)}`.replace(/\s+/g, " ").trim();
+    }
+  }
+  const curWords = current.split(/\s+/);
+  const nextWords = next.split(/\s+/);
+  for (let n = Math.min(curWords.length, nextWords.length); n >= 2; n -= 1) {
+    if (curWords.slice(-n).join(" ") === nextWords.slice(0, n).join(" ")) {
+      return [...curWords, ...nextWords.slice(n)].join(" ");
+    }
+  }
+  return `${current} ${next}`.replace(/\s+/g, " ").trim();
+}
+
 export function looksLikeFollowUpShape(question: string): boolean {
   const q = question.toLowerCase();
   const words = q.split(/\s+/).length;

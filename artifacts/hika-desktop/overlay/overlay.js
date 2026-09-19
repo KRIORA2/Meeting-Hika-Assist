@@ -89,6 +89,8 @@ let warmPipelinePromise = null;
 let liveSpeech = null;
 let liveSpeechFinal = "";
 let liveSpeechActive = false;
+let listenState = "idle";
+let pendingSttCount = 0;
 
 function markRealtimeMetric(name) {
   const now = performance.now();
@@ -455,6 +457,74 @@ function setListeningUI(listening) {
   if (listening) setLiveBadge("● LIVE", "live");
 }
 
+function listenBusy() {
+  return listenState === "stopping" || listenState === "flushing" || listenState === "waiting_stt"
+    || listenState === "finalizing" || listenState === "generating";
+}
+
+function setListenPhase(phase) {
+  listenState = phase;
+  const listening = phase === "starting" || phase === "listening";
+  const finishing = phase === "stopping" || phase === "flushing" || phase === "waiting_stt" || phase === "finalizing";
+  setListeningUI(listening);
+  if (micBtn) micBtn.disabled = finishing || phase === "generating";
+  if (phase === "starting") {
+    if (liveTxText) liveTxText.placeholder = "Starting microphone…";
+    setLiveBadge("Starting…");
+    statusDot.textContent = "● Starting mic";
+    statusDot.className = "status-dot rec";
+  } else if (phase === "stopping" || phase === "flushing") {
+    if (liveTxText) liveTxText.placeholder = "Finishing transcription…";
+    if (micLabel) micLabel.textContent = "Stop";
+    setLiveBadge("Finishing…", "captured");
+    statusDot.textContent = "● Finishing transcription";
+    statusDot.className = "status-dot";
+  } else if (phase === "waiting_stt") {
+    if (liveTxText) liveTxText.placeholder = "Processing the last part of the question…";
+    if (micLabel) micLabel.textContent = "Stop";
+    setLiveBadge("Processing…", "captured");
+    statusDot.textContent = "● Processing question";
+    statusDot.className = "status-dot";
+  } else if (phase === "generating") {
+    if (liveTxText) liveTxText.placeholder = "Generating answer…";
+    setLiveBadge("Generating…", "answering");
+    statusDot.textContent = "⚡ Generating answer";
+    statusDot.className = "status-dot ai";
+  } else if (phase === "idle" || phase === "ready" || phase === "error") {
+    if (micBtn) micBtn.disabled = false;
+  }
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function beginPendingStt() {
+  pendingSttCount += 1;
+}
+
+function endPendingStt() {
+  pendingSttCount = Math.max(0, pendingSttCount - 1);
+}
+
+async function waitForPendingStt(ms = 8000) {
+  const started = Date.now();
+  while ((pendingSttCount > 0 || isTranscribing) && Date.now() - started < ms) {
+    await sleep(50);
+  }
+}
+
+function logListenDiag(event, extra) {
+  if (!realtimeDiagnostics) return;
+  console.debug("[hikanest:listen]", event, {
+    captureId: captureGeneration,
+    listenState,
+    pendingSttRequests: pendingSttCount,
+    isRecording,
+    ...extra,
+  });
+}
+
 function resetSessionStage() {
   liveTxText.value = "";
   askInput.value = "";
@@ -469,10 +539,10 @@ function resetSessionStage() {
   statusDot.className = "status-dot";
 }
 
-async function waitForTranscriptionIdle(ms = 4000) {
+async function waitForTranscriptionIdle(ms = 8000) {
   const started = Date.now();
-  while (isTranscribing && Date.now() - started < ms) {
-    await new Promise((resolve) => setTimeout(resolve, 60));
+  while ((isTranscribing || pendingSttCount > 0) && Date.now() - started < ms) {
+    await sleep(50);
   }
 }
 
@@ -543,6 +613,7 @@ const ENGLISH_QUESTION = /\b(what|why|how|when|where|who|which|tell|explain|desc
 const ENGLISH_FUNCTION_WORDS = new Set(["the","a","an","is","are","was","were","you","i","we","they","to","of","and","in","that","it","for","on","with","this","have","be","what","how","why","can","do","does","tell","me","about","your","my","so","yeah","okay","ok","like","just","when","if","or","not","but","from","at","as","would","could","should","will","there","here","please","yes","no","right","well","hello","hi","hey","explain"]);
 const WEAK_ENGLISH_WORDS = new Set(["a","an","i","no","ok","to","or"]);
 const FOREIGN_FUNCTION_WORDS = new Set(["alsof","hemel","het","een","van","niet","jij","jullie","und","der","die","das","ich","nicht","que","para","como","esto","esta","les","des","une","pas","avec","oui","el","los","las","por","una","ist","che","per","con","kya","hai","aap","kaise","nahi","nahin","haan","theek","acha","accha","bhai","kyun","kyon","mera","meri","tum","hum","kaun","kab","kahan","woh","yeh","aur","itu","bagus","sekali","saya","tidak","yang","untuk","ada","ini","hallo","wie","geht","dir","nuk","kuptoj","tardo","diario","kocham","bueno","gracias","hola","porque","pero","muy","aqui","ahora"]);
+const SHORT_TECH_ASK = /\b(delta|databricks|adf|fabric|snowflake|spark|pyspark|kafka|unity catalog|direct lake|scd(?:\s*type)?|cdc|watermark|power bi|synapse|dlt|lakehouse|parquet|unity)\b/i;
 
 function looksLikeUsEnglish(text) {
   const value = String(text || "").replace(/\s+/g, " ").trim();
@@ -550,6 +621,10 @@ function looksLikeUsEnglish(text) {
   if (/[\u0900-\u097F\u0980-\u09FF\u0A00-\u0A7F\u0A80-\u0AFF\u0B00-\u0B7F\u0C00-\u0C7F\u0C80-\u0CFF\u0D00-\u0D7F]/.test(value)) return false;
   if (HALLUCINATED_TRANSCRIPT.test(value)) return false;
   const words = value.toLowerCase().replace(/[^a-z'\s]/g, " ").split(/\s+/).filter(Boolean);
+  const shortTech = words.length <= 6 && SHORT_TECH_ASK.test(value) && (
+    ENGLISH_QUESTION.test(value) || /[?]/.test(value) || /\bvs\.?\b|versus/i.test(value)
+  );
+  if (shortTech) return true;
   if (words.length < 3) return false;
   const englishHits = words.filter((word) => ENGLISH_FUNCTION_WORDS.has(word)).length;
   const strongEnglish = words.filter((word) => ENGLISH_FUNCTION_WORDS.has(word) && !WEAK_ENGLISH_WORDS.has(word)).length;
@@ -626,12 +701,32 @@ function pickPreferredMic(mics, preferredId) {
 }
 
 function appendCapturedTranscript(existing, incoming) {
+  return mergeSpokenTranscript(existing, incoming);
+}
+
+function mergeSpokenTranscript(existing, incoming) {
   const next = String(incoming || "").replace(/\s+/g, " ").trim();
-  if (!next || isHallucinatedTranscript(next)) return existing || "";
   const current = String(existing || "").replace(/\s+/g, " ").trim();
+  if (!next) return current;
+  if (isHallucinatedTranscript(next)) return current;
   if (!current) return next;
-  if (current.endsWith(next)) return current;
+  if (current === next || current.endsWith(next)) return current;
   if (next.startsWith(current) && next.length > current.length) return next;
+  if (current.includes(next) && current.length >= next.length) return current;
+  if (next.includes(current) && next.length > current.length) return next;
+  const maxChars = Math.min(current.length, next.length);
+  for (let n = maxChars; n >= 8; n -= 1) {
+    if (current.slice(-n) === next.slice(0, n)) {
+      return `${current}${next.slice(n)}`.replace(/\s+/g, " ").trim();
+    }
+  }
+  const curWords = current.split(/\s+/);
+  const nextWords = next.split(/\s+/);
+  for (let n = Math.min(curWords.length, nextWords.length); n >= 2; n -= 1) {
+    if (curWords.slice(-n).join(" ") === nextWords.slice(0, n).join(" ")) {
+      return [...curWords, ...nextWords.slice(n)].join(" ");
+    }
+  }
   return `${current} ${next}`.replace(/\s+/g, " ").trim();
 }
 
@@ -697,8 +792,8 @@ function stopLiveSpeech() {
   }
 }
 
-async function loadMicSources() {
-  if (isRecording) return;
+  async function loadMicSources() {
+  if (isRecording || listenState === "starting" || listenState === "listening" || listenBusy()) return;
   try {
     const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
     stream.getTracks().forEach((track) => track.stop());
@@ -1083,6 +1178,8 @@ async function handleStart() {
 
 function stopCaptureImmediate() {
   captureGeneration += 1;
+  listenState = "idle";
+  pendingSttCount = 0;
   isRecording = false;
   pendingAnalyzeOnStop = false;
   answerOnStopLock = false;
@@ -1118,6 +1215,7 @@ function stopCaptureImmediate() {
     }
   }
   stopAudioPipeline();
+  setListenPhase("idle");
   setListeningUI(false);
 }
 
@@ -1193,10 +1291,12 @@ function startTimer() {
 // ── Audio recording ───────────────────────────────────────────────────────────
 async function toggleRecording() {
   if (!sessionId || sessionEnding) return;
-  if (isRecording) await stopRecording(); else await startRecording();
+  if (listenBusy()) return;
+  if (isRecording || listenState === "listening" || listenState === "starting") await stopRecording();
+  else await startRecording();
 }
 
-function createSourceRecorder(stream, sourceId) {
+function createSourceRecorder(stream, sourceId, generation) {
   if (!hasLiveAudio(stream)) return null;
   const track = stream.getAudioTracks()[0];
   track.enabled = true;
@@ -1210,8 +1310,11 @@ function createSourceRecorder(stream, sourceId) {
   const chunks = [];
   recorder.ondataavailable = (event) => {
     if (event.data && event.data.size > 0) chunks.push(event.data);
-    if (isRecording && event.data && event.data.size >= 500) {
-      void ingestLiveSlice(event.data, sourceId);
+    const allow = generation === captureGeneration && (
+      listenState === "starting" || listenState === "listening" || listenState === "stopping" || listenState === "flushing"
+    );
+    if (allow && event.data && event.data.size >= 500) {
+      void ingestLiveSlice(event.data, sourceId, generation);
     }
   };
   try {
@@ -1220,21 +1323,29 @@ function createSourceRecorder(stream, sourceId) {
     recorder.start();
   }
   if (recorder.state !== "recording") return null;
-  return { recorder, chunks, stream: recordStream, sourceId };
+  return { recorder, chunks, stream: recordStream, sourceId, generation };
 }
 
-async function ingestLiveSlice(blob, sourceId) {
-  if (!isRecording || isTranscribing) return;
-  const peak = sourceId === "mic" ? listenMicPeak : listenMeetingPeak;
-  const other = sourceId === "mic" ? listenMeetingPeak : listenMicPeak;
-  if (peak < 0.04) return;
-  if (other > peak * 1.35) return;
-  const text = await transcribeBlob(blob, { preview: true });
-  if (!isRecording || !text) return;
-  const merged = appendCapturedTranscript(liveTxText.value, text);
-  if (!merged) return;
-  setTranscriptDraft(merged);
-  setLiveBadge("● LIVE", "live");
+async function ingestLiveSlice(blob, sourceId, generation) {
+  if (generation !== captureGeneration) return;
+  if (listenState !== "starting" && listenState !== "listening" && listenState !== "stopping" && listenState !== "flushing") return;
+  if (listenState === "listening") {
+    const peak = sourceId === "mic" ? listenMicPeak : listenMeetingPeak;
+    const other = sourceId === "mic" ? listenMeetingPeak : listenMicPeak;
+    if (peak < 0.04) return;
+    if (other > peak * 1.35) return;
+  }
+  beginPendingStt();
+  try {
+    const text = await transcribeBlob(blob, { preview: true });
+    if (generation !== captureGeneration || !text) return;
+    const merged = appendCapturedTranscript(liveTxText.value, text);
+    if (!merged) return;
+    setTranscriptDraft(merged);
+    if (listenState === "listening") setLiveBadge("● LIVE", "live");
+  } finally {
+    endPendingStt();
+  }
 }
 
 function stopSourceRecorder(handle) {
@@ -1243,7 +1354,10 @@ function stopSourceRecorder(handle) {
       resolve(new Blob([], { type: mimeType }));
       return;
     }
+    let settled = false;
     const finish = () => {
+      if (settled) return;
+      settled = true;
       try {
         const warmTracks = [
           ...(micStream?.getAudioTracks?.() || []),
@@ -1260,6 +1374,7 @@ function stopSourceRecorder(handle) {
       return;
     }
     handle.recorder.onstop = finish;
+    setTimeout(finish, 2500);
     try { handle.recorder.requestData?.(); } catch { /* ignore */ }
     try { handle.recorder.stop(); } catch { finish(); }
   });
@@ -1285,6 +1400,7 @@ function discardSourceRecorder(handle) {
 
 async function startRecording() {
   if (!sessionId || sessionEnding) return;
+  if (listenBusy() || listenState === "starting" || listenState === "listening") return;
   const epoch = sessionEpoch;
   try {
     captureGeneration += 1;
@@ -1295,39 +1411,48 @@ async function startRecording() {
     listenMicPeak = 0;
     listenMeetingPeak = 0;
     listenStartedAt = Date.now();
+    pendingSttCount = 0;
     if (listenFinalizeTimer) {
       clearTimeout(listenFinalizeTimer);
       listenFinalizeTimer = null;
     }
     stopLiveSpeech();
     isRecording = true;
-    setListeningUI(true);
+    setListenPhase("starting");
     recIndicator.hidden = false;
     liveTxEl.style.display = "flex";
     setTranscriptDraft("");
     micTranscriptText = "";
     latestUtterance = "";
     transcriptReadyForAsk = false;
-    statusDot.textContent = "● Listening";
-    statusDot.className = "status-dot rec";
-    setLiveBadge("● LIVE", "live");
+    logListenDiag("listen_start");
 
     const sources = await warmAudioPipeline();
-    if (epoch !== sessionEpoch || sessionEnding || !sessionId) {
-      isRecording = false;
-      setListeningUI(false);
+    if (generation !== captureGeneration || epoch !== sessionEpoch || sessionEnding || !sessionId || listenState !== "starting") {
+      logListenDiag("listen_aborted_after_warm");
       return;
     }
-    micCapture = createSourceRecorder(sources.mic, "mic");
-    meetingCapture = createSourceRecorder(sources.meeting, "meeting");
+    micCapture = createSourceRecorder(sources.mic, "mic", generation);
+    meetingCapture = createSourceRecorder(sources.meeting, "meeting", generation);
+    if (generation !== captureGeneration || listenState !== "starting") {
+      discardSourceRecorder(micCapture);
+      discardSourceRecorder(meetingCapture);
+      micCapture = null;
+      meetingCapture = null;
+      logListenDiag("listen_aborted_after_recorders");
+      return;
+    }
     if (!micCapture && !meetingCapture) {
       throw new Error("The microphone did not start. Allow mic access, then press Listen again.");
     }
     warnedSilentMic = false;
     silentListenFrames = 0;
+    listenState = "listening";
+    setListenPhase("listening");
     const captureName = sources.meeting && sources.mic ? "meeting or mic" : (sources.mic ? "your mic" : "meeting");
     statusDot.textContent = `● Listening · ${captureName}`;
     setLiveBadge(`● LIVE · ${captureName}`, "live");
+    startLiveSpeech();
     watchCaptureHealth(generation);
   } catch (err) {
     const message = err instanceof Error ? err.message : "Audio capture failed.";
@@ -1337,6 +1462,7 @@ async function startRecording() {
 }
 
 function failListen(message) {
+  listenState = "error";
   isRecording = false;
   pendingAnalyzeOnStop = false;
   discardSourceRecorder(micCapture);
@@ -1344,19 +1470,22 @@ function failListen(message) {
   micCapture = null;
   meetingCapture = null;
   stopLiveSpeech();
+  setListenPhase("error");
   setListeningUI(false);
   recIndicator.hidden = true;
   statusDot.textContent = "● Audio error";
   statusDot.className = "status-dot";
   setLiveBadge("Audio error");
   alert(message);
-  showToast("Microphone did not capture audio.");
+  showToast("Microphone access failed.", "error");
+  listenState = "idle";
+  if (micBtn) micBtn.disabled = false;
 }
 
 function watchCaptureHealth(generation) {
   const started = Date.now();
   const tick = () => {
-    if (!isRecording || generation !== captureGeneration || sessionEnding) return;
+    if (listenState !== "listening" || generation !== captureGeneration || sessionEnding) return;
     const recording = [micCapture, meetingCapture].some((handle) => handle?.recorder?.state === "recording");
     const live = hasLiveAudio(micStream) || hasLiveAudio(systemStream);
     if (!live || !recording) {
@@ -1377,53 +1506,75 @@ function watchCaptureHealth(generation) {
 }
 
 async function stopRecording() {
-  if (!isRecording && !pendingAnalyzeOnStop) return;
+  if (listenBusy()) return;
+  if (listenState !== "listening" && listenState !== "starting" && !isRecording && !pendingAnalyzeOnStop) return;
+  const generation = captureGeneration;
+  const epoch = sessionEpoch;
+  const stoppedDuringStart = listenState === "starting";
   clearInterval(chunkTimer);
   chunkTimer = null;
   isRecording = false;
   pendingAnalyzeOnStop = true;
-  setListeningUI(false);
-  const preview = (liveTxText.value || "").replace(/\s+/g, " ").trim();
-  const previewReady = isReadyQuestion(preview);
-  if (previewReady) {
-    statusDot.textContent = "⚡ Answering";
-    setLiveBadge("Answering", "answering");
-  } else {
-    statusDot.textContent = "● Transcribing";
-    setLiveBadge("Transcribing", "captured");
-  }
+  setListenPhase("stopping");
+  logListenDiag("stop_pressed", { stoppedDuringStart });
 
   stopLiveSpeech();
   stopRealtimeVoice(true);
-  const generation = captureGeneration;
-  const epoch = sessionEpoch;
   const micHandle = micCapture;
   const meetingHandle = meetingCapture;
   micCapture = null;
   meetingCapture = null;
-  const blobsPromise = Promise.all([
-    stopSourceRecorder(micHandle),
-    stopSourceRecorder(meetingHandle),
-  ]);
 
-  if (previewReady) {
-    scheduleFinishListen(preview);
-    void blobsPromise;
+  if (stoppedDuringStart && !micHandle && !meetingHandle) {
+    await sleep(80);
+    if (generation !== captureGeneration || epoch !== sessionEpoch) return;
+    pendingAnalyzeOnStop = false;
+    setListenPhase("idle");
+    setListeningUI(false);
+    statusDot.textContent = "● Ready";
+    statusDot.className = "status-dot";
+    setLiveBadge("Ready");
+    showToast("Microphone was still starting. Press Listen, then speak.", "info");
     return;
   }
 
-  const [micBlob, meetingBlob] = await blobsPromise;
+  setListenPhase("flushing");
+  const [micBlob, meetingBlob] = await Promise.all([
+    stopSourceRecorder(micHandle),
+    stopSourceRecorder(meetingHandle),
+  ]);
   if (sessionEnding || generation !== captureGeneration || epoch !== sessionEpoch) return;
 
-  await waitForTranscriptionIdle(400);
+  setListenPhase("waiting_stt");
+  await waitForPendingStt(8000);
+  if (sessionEnding || generation !== captureGeneration || epoch !== sessionEpoch) return;
+
+  const preview = currentTranscript();
   const preferMic = listenMicPeak >= listenMeetingPeak;
   const primary = preferMic ? micBlob : meetingBlob;
   const secondary = preferMic ? meetingBlob : micBlob;
-  let text = "";
-  if (primary.size >= 600) text = await transcribeBlob(primary);
-  if (!text && secondary.size >= 600) text = await transcribeBlob(secondary);
+  let text = preview;
+  let sttFailed = false;
+  try {
+    if (primary.size >= 600) {
+      const finalText = await transcribeBlob(primary);
+      text = mergeSpokenTranscript(preview, finalText) || finalText || preview;
+    }
+    if (!text && secondary.size >= 600) {
+      const finalText = await transcribeBlob(secondary);
+      text = mergeSpokenTranscript(preview, finalText) || finalText || preview;
+    }
+  } catch {
+    sttFailed = true;
+  }
   if (!text && preview && looksLikeUsEnglish(preview)) text = preview;
-  await finishListenAndAnswer(text);
+  logListenDiag("stop_finalized", {
+    audioFlushCompleted: true,
+    partialTranscriptLength: preview.length,
+    finalTranscriptLength: (text || "").length,
+    sttFailed,
+  });
+  await finishListenAndAnswer(text, { sttFailed });
 }
 
 function scheduleFinishListen(text) {
@@ -1458,11 +1609,12 @@ function stopRealtimeVoice(closedByUser = true) {
   realtimeResponseRequested = false;
 }
 
-async function finishListenAndAnswer(sourceText) {
+async function finishListenAndAnswer(sourceText, { sttFailed = false } = {}) {
   const epoch = sessionEpoch;
   if (sessionEnding || !sessionId || epoch !== sessionEpoch) return;
   if (answerOnStopLock) return;
   answerOnStopLock = true;
+  listenState = "finalizing";
   if (listenFinalizeTimer) {
     clearTimeout(listenFinalizeTimer);
     listenFinalizeTimer = null;
@@ -1471,14 +1623,28 @@ async function finishListenAndAnswer(sourceText) {
   stopRealtimeVoice();
 
   const text = String(sourceText ?? currentTranscript()).replace(/\s+/g, " ").trim();
-  if (!text || isHallucinatedTranscript(text)) {
+  if (!text) {
     latestUtterance = "";
     micTranscriptText = "";
-    setTranscriptDraft("");
-    setLiveBadge("No speech");
+    setListenPhase("idle");
+    setListeningUI(false);
+    setLiveBadge(sttFailed ? "Transcription failed" : "No speech");
     statusDot.textContent = "● Ready";
     statusDot.className = "status-dot";
-    showToast("Didn't catch a clear English question. Say the full question, then Stop.");
+    showToast(sttFailed ? "Transcription failed. Please try again." : "No clear speech was detected.", "warn");
+    answerOnStopLock = false;
+    return;
+  }
+  if (isHallucinatedTranscript(text)) {
+    latestUtterance = text;
+    micTranscriptText = text;
+    setTranscriptDraft(text);
+    setListenPhase("idle");
+    setListeningUI(false);
+    setLiveBadge("Unclear speech");
+    statusDot.textContent = "● Ready";
+    statusDot.className = "status-dot";
+    showToast("I caught speech, but it didn't sound like a clear English question.", "warn");
     answerOnStopLock = false;
     return;
   }
@@ -1486,10 +1652,12 @@ async function finishListenAndAnswer(sourceText) {
     latestUtterance = text;
     micTranscriptText = text;
     setTranscriptDraft(text);
+    setListenPhase("idle");
+    setListeningUI(false);
     setLiveBadge("Incomplete");
     statusDot.textContent = "● Ready";
     statusDot.className = "status-dot";
-    showToast("That sounded incomplete. Press Listen until they finish the question.");
+    showToast("I caught your speech, but the question seems incomplete.", "warn");
     answerOnStopLock = false;
     return;
   }
@@ -1497,12 +1665,9 @@ async function finishListenAndAnswer(sourceText) {
   latestUtterance = text;
   micTranscriptText = text;
   setTranscriptDraft(text);
-  setLiveBadge("Captured", "captured");
   addTranscriptChunk(text);
   transcriptReadyForAsk = false;
-  statusDot.textContent = "⚡ Answering";
-  statusDot.className = "status-dot ai";
-  setLiveBadge("Answering", "answering");
+  setListenPhase("generating");
 
   try {
     if (autoAnswerEnabled) {
@@ -1512,12 +1677,14 @@ async function finishListenAndAnswer(sourceText) {
       transcriptReadyForAsk = true;
       askInput.value = text;
       askInput.focus();
-      showToast("Transcript ready — press Ask to generate an answer.");
+      showToast("Transcript ready — press Ask to generate an answer.", "info");
       statusDot.textContent = "● Ready";
       statusDot.className = "status-dot";
       setLiveBadge("Captured", "captured");
     }
   } finally {
+    setListenPhase("idle");
+    setListeningUI(false);
     answerOnStopLock = false;
   }
 }
@@ -1815,10 +1982,7 @@ async function captureDisplayLoopback() {
 
 async function captureSpeakerMix() {
   const devices = await navigator.mediaDevices.enumerateDevices().catch(() => []);
-  const mics = devices.filter((device) => device.kind === "audioinput" && !COMMS_MIC.test(device.label || ""));
-  const preferred = mics.find((device) => LOOPBACK_MIC.test(device.label || ""))
-    || mics.find((device) => /^default\b/i.test(device.label || ""))
-    || mics[0];
+  const preferred = devices.find((device) => device.kind === "audioinput" && LOOPBACK_MIC.test(device.label || ""));
   if (!preferred) return null;
   try {
     const stream = await navigator.mediaDevices.getUserMedia({
@@ -1834,7 +1998,7 @@ async function captureSpeakerMix() {
       stream.getTracks().forEach((track) => track.stop());
       return null;
     }
-    showToast("Using speaker audio. Keep the meeting playing on this PC.");
+    showToast("Using PC loopback audio for Them.", "info");
     return stream;
   } catch {
     return null;
@@ -1905,7 +2069,12 @@ async function getMeetingAudioStream() {
   }
 
   const stream = await captureDesktopLoopback() || await captureSpeakerMix();
-  if (!stream || !hasLiveAudio(stream)) return null;
+  if (!stream || !hasLiveAudio(stream)) {
+    if (isMeetingCapture()) {
+      showToast("Them audio is unavailable. Using your microphone.", "warn");
+    }
+    return null;
+  }
 
   const track = stream.getAudioTracks()[0];
   track.enabled = true;
@@ -2024,8 +2193,8 @@ function stopAudioPipeline() {
 
 // ── Transcription ─────────────────────────────────────────────────────────────
 async function transcribeBlob(blob, { preview = false } = {}) {
-  if (!preview && isTranscribing) await waitForTranscriptionIdle(400);
-  else if (isTranscribing) return "";
+  if (isTranscribing) await waitForTranscriptionIdle(8000);
+  if (isTranscribing) return "";
   isTranscribing = true;
 
   try {
@@ -2040,6 +2209,7 @@ async function transcribeBlob(blob, { preview = false } = {}) {
     return isHallucinatedTranscript(text) ? "" : text;
   } catch (err) {
     console.error("Transcribe error", err);
+    if (!preview) throw err;
     return "";
   } finally {
     isTranscribing = false;
@@ -2050,11 +2220,11 @@ async function transcribeBlob(blob, { preview = false } = {}) {
 async function analyze(utterance) {
   if (!utterance || isAnalyzing || sessionEnding || !sessionId) return false;
   if (isHallucinatedTranscript(utterance)) {
-    showToast("Didn't catch clear US English. Press Listen when they ask again.");
+    showToast("I caught speech, but it didn't sound like a clear English question.", "warn");
     return false;
   }
   if (isIncompleteQuestion(utterance)) {
-    showToast("That sounded incomplete. Wait until they finish the question.");
+    showToast("I caught your speech, but the question seems incomplete.", "warn");
     return false;
   }
   const epoch = sessionEpoch;
@@ -2191,8 +2361,8 @@ async function analyzeStreaming(body, onDelta) {
 }
 
 async function handleManualAsk() {
-  if (isRecording) {
-    showToast("Stop listening first — the answer is generated when you stop the mic.");
+  if (isRecording || listenBusy() || listenState === "starting" || listenState === "listening") {
+    showToast("Stop listening first — the answer is generated when you stop the mic.", "info");
     return;
   }
   const typedQuestion = askInput.value.trim();
@@ -2509,10 +2679,10 @@ function renderAnswerBlocks(ins) {
   return wrap;
 }
 
-function showToast(msg) {
+function showToast(msg, kind = "info") {
   copyToast.textContent = msg;
-  copyToast.classList.add("show");
-  setTimeout(() => copyToast.classList.remove("show"), 1800);
+  copyToast.className = `copy-toast show toast-${kind}`;
+  setTimeout(() => copyToast.classList.remove("show"), kind === "info" ? 1800 : 2800);
 }
 
 function showOutOfCredits() {

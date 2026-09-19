@@ -723,9 +723,11 @@ function collectRepresentatives(bundle: LiveBundle) {
     representativeFrom(pickRow(rows, "Why is my Databricks job slow?", "How do you troubleshoot a slow Databricks job?"), "troubleshooting"),
     representativeFrom(pickRow(rows, "What happens if the pipeline fails halfway?"), "failure"),
     representativeFrom(pickRow(rows, "How do you optimize a Databricks job?", "How do you optimize Power BI?", "How do you optimize a Spark join?"), "optimization"),
+    representativeFrom(pickRow(rows, "ADF vs Databricks?", "Kafka vs Event Hubs?"), "comparison"),
     representativeFrom(pickRow(rows, "Why did you choose watermarking?", "Why did you choose that approach?"), "follow-up"),
     representativeFrom(pickRow(rows, "Wouldn't watermarking fail?", "Would that scale to 10 TB?", "Would that work for 10 TB?"), "challenge"),
     representativeFrom(pickRow(rows, "Tell me about your current project.", "Have you worked with Snowflake?"), "experience"),
+    representativeFrom(pickRow(rows, "Write a MERGE statement.", "Write PySpark code to deduplicate events."), "coding"),
     representativeFrom(pickRow(rows, "How would you design a lakehouse platform?", "Walk me through the ingestion architecture."), "system-design"),
   ];
 }

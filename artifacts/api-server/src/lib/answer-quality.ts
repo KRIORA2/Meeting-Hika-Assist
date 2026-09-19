@@ -17,6 +17,7 @@ const FOREIGN_FUNCTION_WORDS = new Set([
   "tardo", "diario", "kocham", "bueno", "gracias", "hola", "porque", "pero", "muy", "aqui", "ahora",
 ]);
 const HALLUCINATED_TRANSCRIPT = /thanks for watching|thank you for watching|please subscribe|the boy ran quickly|\[music\]|\[silence\]|rewrite:|clarifying:|greeting:|translation:|subtitle:|respond to /i;
+const SHORT_TECH_ASK = /\b(delta|databricks|adf|fabric|snowflake|spark|pyspark|kafka|unity catalog|direct lake|scd(?:\s*type)?|cdc|watermark|power bi|synapse|dlt|lakehouse|parquet|unity)\b/i;
 const TITLED_BOX = /^\s*(contextual explanation|cluster inventory confirmation|explanation|interview tip|follow-?up|details|notes|what is data skew.*|architecture|definition|implementation|best practices)\s*:?\s*$/im;
 const ALL_CAPS_TITLE = /^\s*[A-Z][A-Z0-9 /,&:\-]{10,}\s*$/m;
 const GENERIC_AI = /\b(as an ai|great question|based on the (information|conversation|transcript) provided|as a data engineer with \d+|in my role as an azure data engineer and databricks administrator)\b|certainly[!.,]|passionate and results-driven|proven track record|organizational excellence|stakeholder management|in conclusion|let'?s delve|first and foremost|there are several key (factors|points|aspects)/i;
@@ -93,6 +94,10 @@ export function looksLikeUsEnglish(text: string) {
   }
   if (HALLUCINATED_TRANSCRIPT.test(value)) return false;
   const words = value.toLowerCase().replace(/[^a-z'\s]/g, " ").split(/\s+/).filter(Boolean);
+  const shortTech = words.length <= 6 && SHORT_TECH_ASK.test(value) && (
+    ENGLISH_QUESTION.test(value) || /[?]/.test(value) || /\bvs\.?\b|versus/i.test(value)
+  );
+  if (shortTech) return true;
   if (words.length < 3) return false;
   const englishHits = words.filter((word) => ENGLISH_FUNCTION_WORDS.has(word)).length;
   const strongEnglish = words.filter((word) => ENGLISH_FUNCTION_WORDS.has(word) && !WEAK_ENGLISH_WORDS.has(word)).length;
@@ -195,9 +200,12 @@ export function extractKeyPoints(answer: string, limit = 5): string[] {
   return hits;
 }
 
-export function toSpokenAnswer(text: string, keepPoints = false) {
-  const cleaned = String(text || "")
-    .replace(/```[\s\S]*?```/g, " ")
+export function toSpokenAnswer(text: string, keepPoints = false, opts: { keepCode?: boolean } = {}) {
+  let cleaned = String(text || "");
+  cleaned = opts.keepCode
+    ? cleaned.replace(/```(?:\w+)?\n?/g, "").replace(/```/g, "")
+    : cleaned.replace(/```[\s\S]*?```/g, " ");
+  cleaned = cleaned
     .replace(/^\s*#{1,6}\s+.+$/gm, "")
     .replace(/^\s*\*\*[^*]+\*\*\s*:?\s*$/gm, "")
     .replace(TITLED_BOX, "")

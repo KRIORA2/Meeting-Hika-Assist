@@ -58,7 +58,7 @@ export function rewriteUngroundedExperience(answer: string, persona?: PersonaCar
     );
     text = text.replace(claimRe, (match) => {
       stripped.push(tech);
-      return `I haven't used ${tech} hands-on. A production approach`;
+      return `I haven't worked with ${tech} directly, but technically I would`;
     });
   }
 

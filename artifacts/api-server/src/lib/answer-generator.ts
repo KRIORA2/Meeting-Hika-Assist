@@ -324,7 +324,11 @@ export async function generateInterviewAnswer(args: {
       section.content = sanitizeProductionCode(section.content);
     }
     if (live) {
-      const spoken = toSpokenAnswer(stripCodeFences(looksLikeCodeDump(answer) ? parsedRecommended : answer) || parsedRecommended, askedForPoints);
+      const spoken = toSpokenAnswer(
+        (looksLikeCodeDump(answer) ? parsedRecommended : answer) || parsedRecommended,
+        askedForPoints,
+        { keepCode: true },
+      );
       answer = spoken || "I'd run this in Spark. It does the job in one pass, and I'd still check format and schema before I trust the load.";
     }
   } else if (live) {

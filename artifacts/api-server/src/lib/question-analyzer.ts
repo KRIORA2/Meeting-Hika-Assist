@@ -368,9 +368,26 @@ function looksLikeFollowUp(question: string, previous?: QuestionAnalysis | null)
   return looksLikeFollowUpShape(question);
 }
 
+function sameTechFamily(topic: string, techLabel: string): boolean {
+  const tech = techLabel.toLowerCase();
+  if (topic === "databricks" && /databricks|spark/.test(tech)) return true;
+  if (topic === "spark" && /spark|databricks|python/.test(tech)) return true;
+  if (topic === "delta" && /delta/.test(tech)) return true;
+  if (topic === "adf" && /adf|azure data factory/.test(tech)) return true;
+  if (topic === "fabric" && /fabric/.test(tech)) return true;
+  if (topic === "snowflake" && /snowflake/.test(tech)) return true;
+  if (topic === "powerbi" && /power bi/.test(tech)) return true;
+  if (topic === "unity" && /unity/.test(tech)) return true;
+  if (topic === "kafka" && /kafka/.test(tech)) return true;
+  return false;
+}
+
 function namesNewTopic(question: string, previous: QuestionAnalysis): boolean {
-  const alias = detectAliasTopic(question);
-  if (alias === "general" || alias === previous.topic) return false;
+  const techs = detectTechnologies(question);
+  if (!techs.length) return false;
+  const prev = new Set(previous.technologies.map((item) => item.toLowerCase()));
+  const introduces = techs.some((tech) => !prev.has(tech.toLowerCase()) && !sameTechFamily(previous.topic, tech));
+  if (!introduces) return false;
   // Named technology in "what about X?" / definition / experience resets the thread.
   // Scenario tweaks ("if the source was an API instead") stay follow-ups.
   if (/(instead of|if the source|if we (used|had)|what would you change)/i.test(question)) {
